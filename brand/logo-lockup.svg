@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 260" width="1120" height="260">
+  <defs>
+    <linearGradient id="scar" x1="66" y1="66" x2="194" y2="194" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f85149"/>
+      <stop offset=".45" stop-color="#f85149"/>
+      <stop offset=".62" stop-color="#d29922"/>
+      <stop offset=".8" stop-color="#3fb950"/>
+      <stop offset="1" stop-color="#3fb950"/>
+    </linearGradient>
+  </defs>
+  <rect width="1120" height="260" fill="#0A0F0C"/>
+  <rect x="26" y="26" width="208" height="208" rx="46" fill="#0d1410"/>
+  <path d="M78 78 L182 182" stroke="url(#scar)" stroke-width="19" stroke-linecap="round"/>
+  <g stroke="#c9d1d9" stroke-width="9" stroke-linecap="round">
+    <path d="M87 111 L111 87"/>
+    <path d="M108 132 L132 108"/>
+    <path d="M129 153 L153 129"/>
+    <path d="M150 174 L174 150"/>
+  </g>
+  <text x="284" y="172" font-family="ui-monospace,Menlo,'SF Mono',Consolas,monospace" font-size="118" font-weight="600" letter-spacing="-2">
+    <tspan fill="#f85149">cica</tspan><tspan fill="#3fb950">trixa</tspan>
+  </text>
+</svg>
