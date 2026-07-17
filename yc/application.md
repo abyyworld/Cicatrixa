@@ -1,8 +1,8 @@
 # YC Application — Working Draft
 
-Working name: **Redgreen** (from TDD's red→green cycle — the product's whole thesis
-is "red failing test in, green suite out"). Alternatives if the domain is taken:
-Reprover, Patchproof, Greenline. Check domains + Delaware name before committing.
+Name: **Cicatrixa** (from *cicatrix* — the scar left after a wound heals; the
+product leaves a permanent regression test behind after every fix). Domain
+secured: cicatrixa.com. GitHub org: Cicatrixa.
 
 > ⚠️ Timing: YC now runs four batches a year. It's mid-July 2026 — check
 > ycombinator.com/apply TODAY for the next deadline (Fall '26 applications
@@ -23,7 +23,7 @@ Backups:
 
 When production breaks at 3am, an engineer gets paged, reads logs, reproduces the
 bug, writes a fix, waits for CI, and ships — a 2–6 hour loop that burns your best
-people. Redgreen closes that loop autonomously: it watches your logs and health
+people. Cicatrixa closes that loop autonomously: it watches your logs and health
 checks, diagnoses the root cause from your source code, and — this is the part
 nobody else does — **writes a failing test that reproduces the bug in a sandbox
 before it writes a single line of fix**. Only when that test exists does it patch,
@@ -47,17 +47,49 @@ and our brand.
   board-visible. Buyers already pay for Datadog/PagerDuty/Sentry — we sit on top
   of that spend and close the loop they open.
 
-## Competitors & what you understand that they don't
+## "Why not just ask a strong model?" — the objection to nail
 
-Resolve.ai, Cleric, Traversal (AI SRE — diagnose and suggest, human still fixes);
-Sentry Seer / GitHub Copilot autofix (patch from stack trace, no reproduction, no
-deploy loop); Datadog Bits / incident.io AI (summarize and route incidents).
+Every reviewer will think it: engineers already have Claude/GPT in their terminal;
+why pay for another debugging app? The answer, which should appear near-verbatim
+in the application and on the landing page:
 
-What we understand: **trust is the product, not the patch.** Teams will never
-auto-merge a patch a model "thinks" is right. They will happily auto-merge a patch
-that arrives with a previously-failing-now-passing test, a green suite, and a canary
-behind it — because that's exactly the bar they hold humans to. We automate the
-*evidence*, not just the edit.
+**A strong model is not on call.** Between "a model that can debug" and "a
+production system that heals itself" sits everything that isn't intelligence:
+
+1. **Nobody asks at 3am.** The incident has to be *noticed*, triaged against noise,
+   and acted on while the human is asleep. A chat window has no pager.
+2. **Context assembly is the hard 80%.** The model needs the traceback, the right
+   slice of source, recent deploys, and a place to run code. Engineers do this by
+   hand every time; we do it automatically every time.
+3. **A sandbox with a burden of proof.** Ad-hoc model use produces a plausible
+   patch. Our pipeline cannot ship anything that lacks a previously-failing,
+   now-passing test plus a green suite. The invariant is enforced by the harness,
+   not by prompt discipline.
+4. **Deploy rails.** A model can't canary itself onto 20% of traffic and roll
+   itself back. We own the last mile, which is where the actual risk lives.
+
+The intelligence is a commodity component we buy; the product is the closed loop
+around it. Nobody says "why do you need CI, you can run tests by hand" — we are
+CI for incident response.
+
+## Competitors & the edge
+
+Resolve.ai, Cleric, Traversal (AI SRE copilots — investigate and *explain*, a
+human still writes and ships the fix); Sentry Seer / GitHub Copilot autofix
+(patch from stack trace — no reproduction, no deploy loop); Datadog Bits /
+incident.io (summarize and route).
+
+The edge, stated as one sentence: **they stop at a diagnosis or a guessed patch;
+we stop at healed traffic, and every fix we ship carries a machine-checkable
+proof.** Trust is the product, not the patch. Teams will never auto-merge a
+patch a model "thinks" is right; they will happily auto-merge one that arrives
+with a red-then-green test, a green suite, and a canary behind it — that's the
+same bar they hold humans to. We automate the evidence, not just the edit.
+
+Honest scoping (say this before a partner does): many incidents are infra/config/
+data problems, not code bugs. The AI SRE copilots chase that whole surface; we
+deliberately own the code-defect slice end-to-end, because it's the slice where
+proof is possible and full autonomy is therefore earnable. Beachhead, not ceiling.
 
 ## How do people use it? (distribution answer — also the honest roadmap)
 
@@ -108,7 +140,7 @@ One unbroken screen recording, three windows tiled: terminal, healer dashboard
   shipped as a canary to real traffic, auto-promoted."
 - **0:48–0:60** — `curl -X POST localhost/trigger-bug` → 200. "Bug found, proven,
   fixed, tested, and deployed. Zero human intervention, under N minutes. We're
-  Redgreen — the AI SRE that proves the fix before shipping it."
+  Cicatrixa — the AI SRE that proves the fix before shipping it."
 
 Record 5+ takes; the run is nondeterministic. Keep the best. Never demo live.
 

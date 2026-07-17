@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 
-import telegram_gate
 from config import (
     APP_SRC,
     APPROVAL_MODE,
@@ -85,10 +84,6 @@ async def heal(event: CrashEvent):
         await bus.emit("gate", "Verified patch awaiting one-click approval below",
                        pending=True, diff=fix.diff)
         approved = await _wait_dashboard_approval()
-        await bus.emit("gate", "Approved — deploying" if approved else "Rejected")
-    elif APPROVAL_MODE == "telegram":
-        await bus.emit("gate", "Awaiting one-tap approval on Telegram…")
-        approved = await telegram_gate.request_approval(fix.diff, fix.explanation)
         await bus.emit("gate", "Approved — deploying" if approved else "Rejected")
     else:
         approved = True
@@ -187,7 +182,7 @@ async def dashboard():
 
 
 DASHBOARD_HTML = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Self-Healer</title>
+<html><head><meta charset="utf-8"><title>Cicatrixa</title>
 <style>
   body{background:#0b0e14;color:#c9d1d9;font:14px/1.5 -apple-system,Menlo,monospace;margin:0;padding:24px}
   h1{font-size:18px;color:#e6edf3;margin:0 0 4px}
@@ -207,7 +202,7 @@ DASHBOARD_HTML = """<!doctype html>
   .gatebtns .ok{border:1px solid #3fb950;color:#3fb950}
   .gatebtns .no{border:1px solid #f85149;color:#f85149}
 </style></head><body>
-<h1>🩹 Self-Healing Production System</h1>
+<h1>🩹 Cicatrixa — Self-Healing Production System</h1>
 <div class="sub">watchdog → diagnostician → reproducer → fixer → gate → deployer</div>
 <div class="stages" id="stages"></div>
 <div id="log"></div>

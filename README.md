@@ -4,9 +4,9 @@
 
 ```
  crash ──▶ Watchdog ──▶ Diagnostician ──▶ Reproducer ──▶ Fixer ──▶ [Gate] ──▶ Deployer ──▶ healed
-            logs +        Claude root-      failing        patch     Telegram    Traefik
-            health        cause from        test in        until     one-tap     weighted
-            checks        indexed src       ephemeral      green     approve     canary
+            logs +        LLM root-         failing        patch     one-click   Traefik
+            health        cause from        test in        until     approve     weighted
+            checks        indexed src       ephemeral      green     (optional)  canary
                                             container
 ```
 
@@ -19,17 +19,17 @@ Most "LLM fixes your bug" demos guess a patch from a stack trace and hope. This 
 3. **Reproducer** — *the step nobody else does* — spins an **ephemeral container** and writes a **failing test** that reproduces the bug. If it can't make the bug fail deterministically, the pipeline stops. No repro, no patch.
 4. **Fixer** iterates patches until (a) the reproduction test passes and (b) the **entire existing suite stays green** — both verified in ephemeral containers, never on the live app.
 5. **Deployer** builds the patched image and ships it via **Traefik native weighted routing**: 20% canary traffic, watches error rate + logs for the watch window, then **auto-promotes to 100% or auto-rolls-back**. The old version stays at weight 0 as an instant rollback path.
-6. **Optional human gate** (`APPROVAL_MODE`): `off` = fully autonomous (default), `dashboard` = one-click Approve/Reject on the verified diff right in the live dashboard, `telegram` = one-tap approve via bot.
+6. **Optional human gate** (`APPROVAL_MODE`): `off` = fully autonomous (default), `dashboard` = one-click Approve/Reject on the verified diff right in the live dashboard.
 
 Every stage streams live to an SSE dashboard.
 
 ## Quickstart
 
-Requirements: Docker + Docker Compose, an OpenAI API key.
+Requirements: Docker + Docker Compose, an OpenAI API key. One env var, two commands:
 
 ```bash
-cp .env.example .env       # set OPENAI_API_KEY and HOST_APP_SRC (absolute path to ./app)
-docker compose up --build
+cp .env.example .env       # set OPENAI_API_KEY — that's the only required setting
+docker compose up --build  # run from the repo root
 ```
 
 - **http://localhost:9000** — self-healer dashboard (watch the pipeline live)
@@ -60,7 +60,6 @@ Try the fixed endpoint: `curl -X POST http://localhost/trigger-bug` → no more 
 # .env — pick one
 APPROVAL_MODE=off        # fully autonomous (default)
 APPROVAL_MODE=dashboard  # verified diff + one-click Approve/Reject in the healer UI
-APPROVAL_MODE=telegram   # one-tap approve via bot (also set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID)
 ```
 
 Rejection (or timeout) rolls back all changes — fail safe.
@@ -83,7 +82,6 @@ healer/       the five agents + control plane
   reproducer.py     failing-test writer + ephemeral verification
   fixer.py          patch loop, suite gate, unified diff, rollback
   deployer.py       image build, canary, weight shifting, promote/rollback
-  telegram_gate.py  optional one-tap approval
-  main.py           orchestrator + SSE dashboard
+  main.py           orchestrator + SSE dashboard + one-click approval gate
 traefik/      static config + watched dynamic weights
 ```

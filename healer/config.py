@@ -32,9 +32,6 @@ CANARY_MAX_ERRORS = int(os.getenv("CANARY_MAX_ERRORS", "2"))
 MAX_FIX_ATTEMPTS = int(os.getenv("MAX_FIX_ATTEMPTS", "4"))
 MAX_REPRO_ATTEMPTS = int(os.getenv("MAX_REPRO_ATTEMPTS", "3"))
 
-# Human gate: "off" = fully autonomous, "dashboard" = one-click approve in the
-# healer UI, "telegram" = one-tap approve via bot (requires token + chat id)
+# Human gate: "off" = fully autonomous, "dashboard" = one-click approve in the healer UI
 APPROVAL_MODE = os.getenv("APPROVAL_MODE", "off").lower()
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 APPROVAL_TIMEOUT_SEC = int(os.getenv("APPROVAL_TIMEOUT_SEC", "300"))

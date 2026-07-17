@@ -29,9 +29,8 @@ services:
       - "9000:9000"   # self-healer dashboard (SSE)
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - HOST_APP_SRC=${HOST_APP_SRC}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      # host path of ./app, derived automatically — run compose from the repo root
+      - HOST_APP_SRC=${PWD}/app
       - APPROVAL_MODE=${APPROVAL_MODE:-off}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"

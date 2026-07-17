@@ -3,225 +3,392 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Redgreen — the AI SRE that proves the fix before shipping it. Reproduces production bugs as failing tests, patches until green, ships via canary.">
+<title>Cicatrixa — AI SRE that proves the fix before shipping it</title>
+<meta name="description" content="Cicatrixa reproduces production bugs as failing tests, patches until your suite is green, and ships through a canary. No reproduction, no patch. Ever.">
 </head>
 <body>
-<title>Redgreen — AI SRE that proves the fix before shipping it</title>
 <style>
   :root{
-    --bg:#F5F7F4; --panel:#FFFFFF; --ink:#17201B; --muted:#5C6B62;
-    --line:#DCE3DE; --red:#CE2C31; --green:#2F7C43; --term-bg:#0E1411;
-    --term-ink:#DCE5DF; --term-muted:#83928A;
+    --bg:#0A0F0C; --panel:#101713; --ink:#E4EEE7; --muted:#74857B;
+    --line:#1F2B24; --red:#FF5257; --green:#40D967; --green-dim:#2C7A45;
   }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --bg:#0E1411; --panel:#131B17; --ink:#DCE5DF; --muted:#83928A;
-      --line:#24302A; --red:#E5484D; --green:#46A758;
-    }
-  }
-  :root[data-theme="dark"]{
-    --bg:#0E1411; --panel:#131B17; --ink:#DCE5DF; --muted:#83928A;
-    --line:#24302A; --red:#E5484D; --green:#46A758;
-  }
-  :root[data-theme="light"]{
-    --bg:#F5F7F4; --panel:#FFFFFF; --ink:#17201B; --muted:#5C6B62;
-    --line:#DCE3DE; --red:#CE2C31; --green:#2F7C43;
-  }
+  /* Deliberately single-theme: this page lives in the terminal's world. */
   *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
   body{
     margin:0; background:var(--bg); color:var(--ink);
-    font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif;
+    font:16px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
   }
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-  .wrap{max-width:1000px;margin:0 auto;padding:0 24px}
+  .wrap{max-width:1020px;margin:0 auto;padding:0 24px}
   a{color:inherit}
+  ::selection{background:var(--green-dim);color:#fff}
 
-  header{display:flex;justify-content:space-between;align-items:center;padding:28px 0}
-  .wordmark{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:600;text-decoration:none}
+  header{
+    position:fixed;inset:0 0 auto;z-index:10;
+    background:color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
+  }
+  .nav{display:flex;justify-content:space-between;align-items:center;height:60px}
+  .wordmark{font-family:ui-monospace,Menlo,monospace;font-size:17px;font-weight:600;text-decoration:none;letter-spacing:-.02em}
   .wordmark .r{color:var(--red)} .wordmark .g{color:var(--green)}
-  .nav-cta{font-size:14px;color:var(--muted);text-decoration:none;border:1px solid var(--line);padding:8px 16px;border-radius:999px}
-  .nav-cta:hover,.nav-cta:focus-visible{color:var(--ink);border-color:var(--muted)}
+  .nav-cta{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);text-decoration:none;border:1px solid var(--line);padding:7px 16px;border-radius:6px;transition:color .2s,border-color .2s}
+  .nav-cta:hover,.nav-cta:focus-visible{color:var(--green);border-color:var(--green-dim)}
 
-  .hero{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center;padding:56px 0 72px}
-  @media (max-width:860px){.hero{grid-template-columns:1fr}}
-  .eyebrow{font-family:ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 16px}
-  h1{
+  /* ---------- hero ---------- */
+  .hero{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding-top:60px}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  #stage{display:block;width:100%;height:46svh;min-height:280px;cursor:crosshair}
+  .status{
+    font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);
+    text-align:center;height:1.5em;letter-spacing:.08em;
+  }
+  .status .cursor{display:inline-block;width:.55em;height:1.05em;background:var(--muted);vertical-align:text-bottom;margin-left:2px;animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .hero-foot{text-align:center;margin-top:40px}
+  .hero-foot .lede{font-size:18px;color:var(--muted);max-width:36em;margin:0 auto 26px;text-wrap:balance}
+  .hero-foot .lede strong{color:var(--ink);font-weight:600}
+  .cta{
+    display:inline-block;background:var(--green);color:#06130A;text-decoration:none;
+    font-weight:650;padding:13px 28px;border-radius:8px;transition:transform .15s,box-shadow .15s;
+  }
+  .cta:hover,.cta:focus-visible{transform:translateY(-1px);box-shadow:0 8px 30px rgba(64,217,103,.25)}
+  .scrollhint{margin-top:56px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-size:12px;text-align:center;letter-spacing:.14em}
+
+  /* ---------- sections ---------- */
+  section{padding:104px 0;border-top:1px solid var(--line)}
+  .eyebrow{font-family:ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);margin:0 0 18px}
+  h2{
     font-family:Georgia,'Times New Roman',serif;font-weight:400;
-    font-size:clamp(38px,5.4vw,58px);line-height:1.08;letter-spacing:-.015em;
-    margin:0 0 20px;text-wrap:balance;
+    font-size:clamp(28px,3.8vw,42px);line-height:1.12;letter-spacing:-.012em;
+    margin:0 0 18px;text-wrap:balance;max-width:20em;
   }
-  h1 .fail{color:var(--red)} h1 .pass{color:var(--green)}
-  .lede{font-size:18px;color:var(--muted);max-width:34em;margin:0 0 28px}
-  .cta{display:inline-block;background:var(--green);color:#fff;text-decoration:none;font-weight:600;padding:12px 24px;border-radius:8px}
-  .cta:hover,.cta:focus-visible{filter:brightness(1.1)}
-  .cta-note{font-size:13px;color:var(--muted);margin-top:10px}
-
-  /* Terminal — deliberately dark in both themes */
-  .term{
-    background:var(--term-bg);border:1px solid #24302A;border-radius:10px;
-    padding:18px 20px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-    font-size:13.5px;line-height:1.85;color:var(--term-ink);
-    min-height:230px;overflow-x:auto;box-shadow:0 24px 60px rgba(0,0,0,.25);
-  }
-  .term .dots{display:flex;gap:6px;margin-bottom:12px}
-  .term .dots i{width:10px;height:10px;border-radius:50%;background:#2C3A33}
-  .term .line{white-space:pre;opacity:0;transform:translateY(4px);transition:opacity .3s,transform .3s}
-  .term .line.show{opacity:1;transform:none}
-  .t-red{color:#FF6B70}.t-green{color:#5CC46E}.t-dim{color:var(--term-muted)}
-  @media (prefers-reduced-motion: reduce){.term .line{opacity:1;transform:none;transition:none}}
-
-  section{padding:64px 0;border-top:1px solid var(--line)}
-  h2{font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:clamp(26px,3.4vw,36px);letter-spacing:-.01em;line-height:1.15;margin:0 0 14px;text-wrap:balance}
-  .measure{max-width:40em;color:var(--muted)}
+  .measure{max-width:41em;color:var(--muted);font-size:16.5px}
   .measure strong{color:var(--ink)}
+  .measure + .measure{margin-top:1em}
 
-  .invariant{
-    margin:36px 0 0;border-left:3px solid var(--green);background:var(--panel);
-    border-radius:0 10px 10px 0;padding:20px 24px;max-width:44em;
+  .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s ease}
+  .reveal.in{opacity:1;transform:none}
+  @media (prefers-reduced-motion: reduce){
+    .reveal{opacity:1;transform:none;transition:none}
+    .status .cursor{animation:none}
   }
-  .invariant p{margin:0;font-family:Georgia,serif;font-size:20px}
-  .invariant .who{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted);margin-top:8px}
 
-  .stages{list-style:none;counter-reset:st;margin:40px 0 0;padding:0;display:grid;gap:0}
+  .gaplist{margin:36px 0 0;padding:0;list-style:none;display:grid;gap:14px;max-width:44em}
+  .gaplist li{
+    display:grid;grid-template-columns:34px 1fr;gap:14px;align-items:baseline;
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 20px;
+  }
+  .gaplist .n{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--red)}
+  .gaplist p{margin:0;color:var(--muted);font-size:15px}
+  .gaplist strong{color:var(--ink)}
+
+  .interstitial{text-align:center;padding:130px 0}
+  .interstitial p.big{
+    font-family:Georgia,serif;font-size:clamp(30px,4.6vw,52px);line-height:1.15;
+    margin:0;letter-spacing:-.01em;
+  }
+  .interstitial p.big em{font-style:normal;color:var(--green)}
+  .interstitial .who{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);margin-top:18px;letter-spacing:.1em}
+
+  .stages{list-style:none;counter-reset:st;margin:44px 0 0;padding:0;position:relative}
+  .stages::before{content:"";position:absolute;left:11px;top:14px;bottom:14px;width:1px;background:var(--line)}
   .stages li{
-    counter-increment:st;display:grid;grid-template-columns:56px 200px 1fr;gap:16px;
-    padding:18px 0;border-top:1px solid var(--line);align-items:baseline;
+    counter-increment:st;position:relative;padding:0 0 36px 52px;
   }
-  .stages li:first-child{border-top:none}
-  @media (max-width:700px){.stages li{grid-template-columns:44px 1fr}.stages li p{grid-column:2}}
+  .stages li:last-child{padding-bottom:0}
   .stages li::before{
-    content:"0" counter(st);font-family:ui-monospace,Menlo,monospace;
-    font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;
+    content:"";position:absolute;left:6px;top:7px;width:11px;height:11px;border-radius:50%;
+    background:var(--bg);border:2px solid var(--muted);
   }
-  .stages h3{margin:0;font-size:16px;font-weight:600}
-  .stages p{margin:0;color:var(--muted);font-size:15px;max-width:38em}
+  .stages li.key::before{border-color:var(--green);background:var(--green);box-shadow:0 0 14px rgba(64,217,103,.5)}
+  .stages h3{margin:0 0 6px;font-size:16.5px;font-weight:600;display:flex;gap:12px;align-items:baseline}
+  .stages h3 .idx{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .stages p{margin:0;color:var(--muted);font-size:15px;max-width:36em}
   .stages .key h3{color:var(--green)}
   .stages .key p strong{color:var(--ink)}
 
-  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:36px}
-  @media (max-width:700px){.steps{grid-template-columns:1fr}}
-  .step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:22px}
-  .step .k{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
-  .step h3{margin:10px 0 8px;font-size:16px}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:40px}
+  @media (max-width:720px){.steps{grid-template-columns:1fr}}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;transition:border-color .25s}
+  .step:hover{border-color:var(--green-dim)}
+  .step .k{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--green);letter-spacing:.12em}
+  .step h3{margin:12px 0 8px;font-size:16px}
   .step p{margin:0;color:var(--muted);font-size:14.5px}
 
-  .vs{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:36px}
-  @media (max-width:700px){.vs{grid-template-columns:1fr}}
-  .vs .col{border:1px solid var(--line);border-radius:10px;padding:24px;background:var(--panel)}
-  .vs .col.them{border-top:3px solid var(--red)}
-  .vs .col.us{border-top:3px solid var(--green)}
-  .vs h3{margin:0 0 14px;font-size:15px;font-family:ui-monospace,Menlo,monospace;font-weight:600}
-  .vs ul{margin:0;padding:0;list-style:none;display:grid;gap:10px;color:var(--muted);font-size:15px}
-  .vs .us ul li::before{content:"✓ ";color:var(--green)}
-  .vs .them ul li::before{content:"✗ ";color:var(--red)}
+  .tablewrap{overflow-x:auto;margin-top:40px;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:14.5px}
+  th,td{padding:14px 18px;text-align:left;border-top:1px solid var(--line)}
+  thead th{border-top:none;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;letter-spacing:.08em;color:var(--muted);font-weight:600;background:var(--panel)}
+  thead th.us{color:var(--green)}
+  tbody th{font-weight:500;color:var(--ink);font-size:14px}
+  td{color:var(--muted)}
+  td .y{color:var(--green);font-family:ui-monospace,Menlo,monospace}
+  td .n{color:var(--red);font-family:ui-monospace,Menlo,monospace}
+  td .p{color:var(--muted);font-family:ui-monospace,Menlo,monospace}
+  tbody tr td:last-child{background:rgba(64,217,103,.045)}
 
-  .final{text-align:center;padding:88px 0}
-  .final h2{font-size:clamp(30px,4vw,44px)}
-  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:13px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .final{text-align:center;padding:130px 0 110px}
+  .final h2{margin-left:auto;margin-right:auto}
+  .final .measure{margin:0 auto 34px}
+  footer{border-top:1px solid var(--line);padding:30px 0;color:var(--muted);font-size:13px}
+  footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
 </style>
 
-<div class="wrap">
-  <header>
-    <a class="wordmark" href="#"><span class="r">red</span><span class="g">green</span></a>
-    <a class="nav-cta" href="#access">Early access</a>
-  </header>
-
-  <div class="hero">
-    <div>
-      <p class="eyebrow">Autonomous site reliability</p>
-      <h1>Your AI SRE <span class="fail">proves the bug</span>, then <span class="pass">ships the fix</span>.</h1>
-      <p class="lede">When production breaks, Redgreen reproduces the crash as a failing test in a sandbox, patches until your whole suite is green, and ships through a canary — before your on-call even wakes up.</p>
-      <a class="cta" href="#access">Get early access</a>
-      <p class="cta-note">Piloting with a handful of teams. One real bug healed free.</p>
-    </div>
-    <div class="term" id="term" aria-label="Terminal showing an autonomous heal">
-      <div class="dots"><i></i><i></i><i></i></div>
-      <div class="line t-dim">$ redgreen heal --incident SEV-2 orders-api</div>
-      <div class="line">watchdog      crash detected · ZeroDivisionError</div>
-      <div class="line">diagnose      root cause pinned · main.py:57</div>
-      <div class="line t-red">reproduce     test_discount_100.py FAILED  ← proof</div>
-      <div class="line">fix           patch attempt 1 · rerunning…</div>
-      <div class="line t-green">verify        repro PASSED · suite 14/14 green</div>
-      <div class="line t-green">deploy        canary 20% → 0 errors → promoted 100%</div>
-      <div class="line t-dim">healed in 4m 12s · regression test kept forever</div>
-    </div>
+<header>
+  <div class="wrap nav">
+    <a class="wordmark" href="#"><span class="r">cica</span><span class="g">trixa</span></a>
+    <a class="nav-cta" href="#access">request access →</a>
   </div>
+</header>
 
-  <section>
-    <h2>A stack trace tells you where code died.<br>A failing test tells you what correct looks like.</h2>
-    <p class="measure">Every "AI fixes your bug" tool patches straight from the stack trace and hopes. That's guessing with confidence. <strong>A failing test is the only machine-checkable definition of a bug</strong> — so Redgreen refuses to write a fix until it has reproduced the crash as a red test in an isolated sandbox. Then, and only then, it patches until that test — and your entire existing suite — runs green.</p>
-    <div class="invariant">
-      <p>No reproduction, no patch. Ever.</p>
-      <p class="who">— the one rule the agent cannot break</p>
-    </div>
+<div class="hero">
+  <h1 class="sr">Cicatrixa — the AI SRE that proves the fix before shipping it. Failing test in, passing suite out.</h1>
+  <canvas id="stage" aria-hidden="true"></canvas>
+  <p class="status mono"><span id="status">booting</span><span class="cursor"></span></p>
+  <div class="wrap hero-foot">
+    <p class="lede">When production breaks, Cicatrixa reproduces the crash as a <strong>failing test</strong>, patches until your whole suite is <strong>green</strong>, and ships through a canary — before your on-call wakes up.</p>
+    <a class="cta" href="#access">Get early access</a>
+    <p class="scrollhint">▼ HOW IT REFUSES TO GUESS</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <section class="reveal">
+    <p class="eyebrow">The objection, answered</p>
+    <h2>You already have a strong model.<br>It's not on call.</h2>
+    <p class="measure">Yes — the model in your terminal can debug. But between <strong>"a model that can debug"</strong> and <strong>"a production system that heals itself"</strong> sits everything that isn't intelligence. Nobody says "why do you need CI — you can run the tests by hand." We're CI for incident response.</p>
+    <ul class="gaplist">
+      <li><span class="n">01</span><p><strong>Nobody asks at 3:07am.</strong> The incident must be noticed, triaged against noise, and acted on while the human is asleep. A chat window has no pager.</p></li>
+      <li><span class="n">02</span><p><strong>Context assembly is the hard 80%.</strong> Traceback, the right slice of source, recent deploys, somewhere to run code. Engineers rebuild this by hand every incident; we assemble it automatically, every time.</p></li>
+      <li><span class="n">03</span><p><strong>A sandbox with a burden of proof.</strong> Ad-hoc model use produces a plausible patch. Our harness physically cannot ship anything without a previously-failing, now-passing test and a green suite. The rule is enforced by the pipeline, not by prompt discipline.</p></li>
+      <li><span class="n">04</span><p><strong>Deploy rails.</strong> A model can't put itself on 20% of live traffic and roll itself back. We own the last mile — which is where the actual risk lives.</p></li>
+    </ul>
   </section>
+</div>
 
-  <section>
-    <h2>The healing loop</h2>
-    <p class="measure">Six stages, fully autonomous, each one gated by the last. The same bar you hold human engineers to — evidence first, ship second.</p>
+<div class="interstitial reveal">
+  <div class="wrap">
+    <p class="big">No reproduction, <em>no patch.</em> Ever.</p>
+    <p class="who">— THE ONE RULE THE AGENT CANNOT BREAK</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <section class="reveal">
+    <p class="eyebrow">The healing loop</p>
+    <h2>Six stages. Each one gated by the last.</h2>
+    <p class="measure">The same bar you hold human engineers to — evidence first, ship second.</p>
     <ol class="stages">
-      <li><h3>Watchdog</h3><p>Tails logs and health checks on your live service. Catches error spikes and crashes with full tracebacks.</p></li>
-      <li><h3>Diagnostician</h3><p>Reads the traceback against your indexed source and pins the root cause — file, line, and the input that triggers it.</p></li>
-      <li class="key"><h3>Reproducer</h3><p><strong>The step nobody else does.</strong> Writes a failing test in an ephemeral sandbox that proves the bug. If it can't prove it, the pipeline stops.</p></li>
-      <li><h3>Fixer</h3><p>Patches until the reproduction test passes and your full suite stays green — verified in sandboxes, never on prod.</p></li>
-      <li><h3>Gate</h3><p>Optional human approval on the verified diff — or fully autonomous once you trust it. Autonomy is a dial, not a switch.</p></li>
-      <li><h3>Canary</h3><p>Ships to a slice of live traffic, watches the error rate, auto-promotes or rolls back. The regression test stays in your repo forever.</p></li>
+      <li><h3><span class="idx">01</span>Watchdog</h3><p>Tails logs and health checks on the live service. Catches error spikes and crashes with full tracebacks.</p></li>
+      <li><h3><span class="idx">02</span>Diagnostician</h3><p>Reads the traceback against your indexed source and pins the root cause — file, line, and the exact input that triggers it.</p></li>
+      <li class="key"><h3><span class="idx">03</span>Reproducer</h3><p><strong>The step nobody else does.</strong> Writes a failing test in an isolated sandbox that proves the bug. Can't prove it? The pipeline stops. Guessing is not an option it has.</p></li>
+      <li><h3><span class="idx">04</span>Fixer</h3><p>Patches until the reproduction test passes and the full existing suite stays green — verified in sandboxes, never on prod.</p></li>
+      <li><h3><span class="idx">05</span>Gate</h3><p>Optional one-click human approval on the verified diff. Autonomy is a dial you turn as trust accrues, not a leap of faith.</p></li>
+      <li><h3><span class="idx">06</span>Canary</h3><p>Ships to a slice of live traffic, watches the error rate, auto-promotes or rolls back. The regression test stays in your repo forever.</p></li>
     </ol>
   </section>
 
-  <section>
-    <h2>Installs in minutes. Runs in ours, not yours.</h2>
-    <p class="measure">No agents in your production. No Docker to run. Reproduction and patching happen in our sandboxed runners — the output lands in your repo as an ordinary pull request.</p>
+  <section class="reveal">
+    <p class="eyebrow">Zero infra change</p>
+    <h2>Installs in minutes.<br>Runs in our sandboxes, not your prod.</h2>
+    <p class="measure">No agents on your servers. No Docker to operate. Reproduction and patching happen in our isolated runners; the output lands in your repo as an ordinary pull request. <strong>Approving the PR is the deploy.</strong></p>
     <div class="steps">
-      <div class="step"><span class="k">Step 1</span><h3>Connect your alerts</h3><p>Point a Sentry, Datadog, or CloudWatch webhook at Redgreen. Five minutes.</p></div>
-      <div class="step"><span class="k">Step 2</span><h3>Install the GitHub App</h3><p>Repo read, pull-request write. Nothing touches your infrastructure.</p></div>
-      <div class="step"><span class="k">Step 3</span><h3>Review the proof</h3><p>Each incident becomes a PR: failing test + minimal fix + green suite. Approving the PR is the deploy.</p></div>
+      <div class="step"><span class="k">STEP 1</span><h3>Point your alerts at us</h3><p>A Sentry, Datadog, or CloudWatch webhook. Five minutes, reversible any time.</p></div>
+      <div class="step"><span class="k">STEP 2</span><h3>Install the GitHub App</h3><p>Repo read, pull-request write. Nothing else. Nothing touches your infrastructure.</p></div>
+      <div class="step"><span class="k">STEP 3</span><h3>Wake up to proof</h3><p>Each incident becomes a PR: failing test + minimal fix + green suite + canary plan.</p></div>
     </div>
   </section>
 
-  <section>
-    <h2>Guessing vs. proving</h2>
-    <div class="vs">
-      <div class="col them">
-        <h3 style="color:var(--red)">stack-trace autofix</h3>
-        <ul>
-          <li>Patch generated straight from the traceback</li>
-          <li>No reproduction — correctness is vibes</li>
-          <li>You review harder because you trust it less</li>
-          <li>Nothing prevents the regression returning</li>
-        </ul>
-      </div>
-      <div class="col us">
-        <h3 style="color:var(--green)">redgreen</h3>
-        <ul>
-          <li>Failing test written and verified first</li>
-          <li>Patch accepted only when repro + full suite pass</li>
-          <li>Canary deploy with automatic rollback</li>
-          <li>Permanent regression test left in your repo</li>
-        </ul>
-      </div>
+  <section class="reveal">
+    <p class="eyebrow">Where we sit</p>
+    <h2>Copilots explain. Autofixers guess.<br>We prove, then ship.</h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col"></th>
+            <th scope="col">strong model in a terminal</th>
+            <th scope="col">AI SRE copilots</th>
+            <th scope="col" class="us">cicatrixa</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Notices the incident</th><td><span class="n">✗</span> you do</td><td><span class="y">✓</span> alerts</td><td><span class="y">✓</span> alerts</td></tr>
+          <tr><th scope="row">Assembles the context</th><td><span class="n">✗</span> you do</td><td><span class="y">✓</span></td><td><span class="y">✓</span></td></tr>
+          <tr><th scope="row">Reproduces as a failing test</th><td><span class="p">±</span> if you insist</td><td><span class="n">✗</span></td><td><span class="y">✓</span> always, or halts</td></tr>
+          <tr><th scope="row">Writes a verified fix</th><td><span class="p">±</span> plausible patch</td><td><span class="n">✗</span> explains only</td><td><span class="y">✓</span> repro + suite green</td></tr>
+          <tr><th scope="row">Ships it &amp; rolls back</th><td><span class="n">✗</span></td><td><span class="n">✗</span></td><td><span class="y">✓</span> canary, auto</td></tr>
+          <tr><th scope="row">Leaves an artifact behind</th><td><span class="n">✗</span> chat scrollback</td><td><span class="p">±</span> incident report</td><td><span class="y">✓</span> permanent regression test</td></tr>
+        </tbody>
+      </table>
     </div>
   </section>
-
-  <section class="final" id="access">
-    <h2>Stop paging humans for<br>bugs a machine can prove.</h2>
-    <p class="measure" style="margin:0 auto 28px">We're onboarding a small group of design partners. Bring us one real production bug — we'll heal it free.</p>
-    <a class="cta" href="mailto:annolieberto@gmail.com?subject=Redgreen%20early%20access">Request early access</a>
-  </section>
-
-  <footer>
-    <span><span class="mono"><span style="color:var(--red)">red</span><span style="color:var(--green)">green</span></span> · autonomous site reliability</span>
-    <span>© 2026</span>
-  </footer>
 </div>
 
+<div class="final reveal" id="access">
+  <div class="wrap">
+    <p class="eyebrow">Early access</p>
+    <h2>Stop paging humans for bugs<br>a machine can prove.</h2>
+    <p class="measure">We're onboarding a small group of design partners. Bring us one real production bug — we'll heal it free, failing test included.</p>
+    <a class="cta" href="mailto:annolieberto@gmail.com?subject=Cicatrixa%20early%20access">Request early access</a>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span><span class="mono"><span style="color:var(--red)">cica</span><span style="color:var(--green)">trixa</span></span> · autonomous site reliability</span>
+    <span class="mono">exit code 0 · © 2026 Cicatrixa</span>
+  </div>
+</footer>
+
 <script>
-  (function(){
-    var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var lines = document.querySelectorAll("#term .line");
-    if(reduced){ lines.forEach(function(l){ l.classList.add("show"); }); return; }
-    lines.forEach(function(l,i){ setTimeout(function(){ l.classList.add("show"); }, 500 + i*650); });
-  })();
+(function(){
+  "use strict";
+  var canvas = document.getElementById("stage");
+  var ctx = canvas.getContext("2d");
+  var statusEl = document.getElementById("status");
+  var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var RED = [255,82,87], GREEN = [64,217,103], DIM = [96,112,103];
+  var WORDS = [
+    {text:"✗ FAILED", color:RED,   status:"incident detected · ZeroDivisionError · orders-api"},
+    {text:"✓ PASSED", color:GREEN, status:"healed · suite 14/14 green · canary promoted 100%"}
+  ];
+  var SCATTER_STATUS = ["watchdog","diagnose","reproduce ← proof","fix","verify","canary"];
+
+  var W=0, H=0, DPR=1, particles=[], targets=[[],[]];
+  var mouse = {x:-9999, y:-9999};
+
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio||1, 2);
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = W*DPR; canvas.height = H*DPR;
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    targets = WORDS.map(function(w){ return sample(w.text); });
+    var n = Math.min(3000, Math.max(targets[0].length, targets[1].length));
+    while(particles.length < n) particles.push({
+      x:Math.random()*W, y:Math.random()*H, vx:0, vy:0,
+      c:DIM.slice(), j:Math.random()*6.28
+    });
+    particles.length = n;
+  }
+
+  function sample(text){
+    var off = document.createElement("canvas");
+    off.width = W; off.height = H;
+    var o = off.getContext("2d");
+    var size = Math.min(W/(text.length*0.62), H*0.62);
+    o.font = "700 "+size+"px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    o.textAlign="center"; o.textBaseline="middle";
+    o.fillStyle="#fff"; o.fillText(text, W/2, H/2);
+    var data = o.getImageData(0,0,W,H).data;
+    var gap = Math.max(3, Math.round(Math.sqrt((W*H)/26000)));
+    var pts = [];
+    for(var y=0; y<H; y+=gap){
+      for(var x=0; x<W; x+=gap){
+        if(data[(y*W+x)*4+3] > 128) pts.push([x,y]);
+      }
+    }
+    // shuffle so particle→point mapping looks organic between words
+    for(var i=pts.length-1;i>0;i--){var k=(Math.random()*(i+1))|0;var t=pts[i];pts[i]=pts[k];pts[k]=t;}
+    return pts;
+  }
+
+  // phase machine: 0 assemble w0, 1 hold, 2 scatter, 3 assemble w1, 4 hold, 5 scatter
+  var DUR = [1500, 2100, 1300, 1500, 2600, 1300];
+  var phase = 0, phaseT = 0, last = 0, scatterIdx = 0, scatterTick = 0;
+
+  function wordOf(p){ return (p<3) ? 0 : 1; }
+
+  function step(now){
+    var dt = Math.min(32, now-last); last = now;
+    phaseT += dt;
+    if(phaseT >= DUR[phase]){
+      phaseT = 0; phase = (phase+1)%6;
+      if(phase===0||phase===3){ /* new assembly */ }
+      if(phase===1) statusEl.textContent = WORDS[0].status;
+      if(phase===4) statusEl.textContent = WORDS[1].status;
+      if(phase===2||phase===5){ scatterIdx=0; scatterTick=0; }
+    }
+    if(phase===2||phase===5){
+      scatterTick += dt;
+      if(scatterTick > 210){
+        scatterTick = 0;
+        statusEl.textContent = "▸ " + SCATTER_STATUS[scatterIdx % SCATTER_STATUS.length];
+        scatterIdx++;
+      }
+    }
+
+    var w = wordOf(phase);
+    var pts = targets[w];
+    var col = (phase===2||phase===5) ? DIM : WORDS[w].color;
+    var assembling = (phase!==2 && phase!==5);
+
+    ctx.clearRect(0,0,W,H);
+    for(var i=0;i<particles.length;i++){
+      var p = particles[i];
+      if(assembling){
+        var t = pts[i % pts.length];
+        p.vx += (t[0]-p.x)*0.055; p.vy += (t[1]-p.y)*0.055;
+        p.vx *= 0.82; p.vy *= 0.82;
+      } else {
+        p.j += 0.02;
+        p.vx += Math.cos(p.j*3+i)*0.12; p.vy += Math.sin(p.j*2.3+i)*0.12;
+        p.vx *= 0.96; p.vy *= 0.96;
+      }
+      // cursor repulsion
+      var dx = p.x-mouse.x, dy = p.y-mouse.y, d2 = dx*dx+dy*dy;
+      if(d2 < 8100){
+        var d = Math.sqrt(d2)||1, f = (90-d)/90*2.2;
+        p.vx += dx/d*f; p.vy += dy/d*f;
+      }
+      p.x += p.vx; p.y += p.vy;
+      // color ease
+      p.c[0]+=(col[0]-p.c[0])*0.06; p.c[1]+=(col[1]-p.c[1])*0.06; p.c[2]+=(col[2]-p.c[2])*0.06;
+      ctx.fillStyle = "rgb("+(p.c[0]|0)+","+(p.c[1]|0)+","+(p.c[2]|0)+")";
+      ctx.fillRect(p.x, p.y, 2.1, 2.1);
+    }
+    requestAnimationFrame(step);
+  }
+
+  function staticRender(){
+    // reduced motion: draw the healed state, no animation
+    ctx.clearRect(0,0,W,H);
+    var pts = targets[1];
+    ctx.fillStyle = "rgb("+GREEN.join(",")+")";
+    for(var i=0;i<pts.length;i++) ctx.fillRect(pts[i][0], pts[i][1], 2.1, 2.1);
+    statusEl.textContent = WORDS[1].status;
+  }
+
+  canvas.addEventListener("pointermove", function(e){
+    var r = canvas.getBoundingClientRect();
+    mouse.x = e.clientX-r.left; mouse.y = e.clientY-r.top;
+  });
+  canvas.addEventListener("pointerleave", function(){ mouse.x=-9999; mouse.y=-9999; });
+
+  var rT;
+  window.addEventListener("resize", function(){
+    clearTimeout(rT);
+    rT = setTimeout(function(){ resize(); if(reduced) staticRender(); }, 150);
+  });
+
+  resize();
+  if(reduced){ staticRender(); }
+  else { statusEl.textContent = "incident detected · ZeroDivisionError · orders-api"; requestAnimationFrame(function(t){ last=t; requestAnimationFrame(step); }); }
+
+  // scroll reveals
+  var els = document.querySelectorAll(".reveal");
+  if(reduced || !("IntersectionObserver" in window)){
+    els.forEach(function(el){ el.classList.add("in"); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target); } });
+    }, {threshold:0.12});
+    els.forEach(function(el){ io.observe(el); });
+  }
+})();
 </script>
 
 </body>
