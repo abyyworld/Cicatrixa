@@ -1,0 +1,15 @@
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    directory: /dynamic
+    watch: true
+
+api:
+  dashboard: true
+  insecure: true   # Traefik dashboard on :8080 — demo only
+
+log:
+  level: INFO

@@ -1,0 +1,7 @@
+openai
+docker
+httpx
+fastapi
+uvicorn[standard]
+pydantic
+pyyaml

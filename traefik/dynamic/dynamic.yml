@@ -1,0 +1,22 @@
+http:
+  routers:
+    orders:
+      rule: "PathPrefix(`/`)"
+      entryPoints: [web]
+      service: orders-weighted
+  services:
+    orders-weighted:
+      weighted:
+        services:
+          - name: orders-stable
+            weight: 100
+          - name: orders-canary
+            weight: 0
+    orders-stable:
+      loadBalancer:
+        servers:
+          - url: "http://app-stable:8000"
+    orders-canary:
+      loadBalancer:
+        servers:
+          - url: "http://app-canary:8000"
