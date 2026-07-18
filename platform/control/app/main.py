@@ -473,6 +473,14 @@ async def connect_start(request: Request):
         return need_login(request)
     if not gh.app_configured():
         return RedirectResponse("/connect/github", status_code=303)
+    existing = db.one("SELECT * FROM github_connections WHERE user_id=? AND kind='app' "
+                      "ORDER BY id DESC LIMIT 1", (user["id"],))
+    if existing and existing["installation_id"]:
+        # App already installed — send to GitHub's installation settings page
+        # (has repo picker + Save button) rather than the fresh-install page which
+        # has no proceed button when the app is already installed.
+        return RedirectResponse(
+            f"https://github.com/settings/installations/{existing['installation_id']}")
     state = auth.sign_state(str(user["id"]))
     return RedirectResponse(
         f"https://github.com/apps/{gh.app_slug()}/installations/new?state={state}")

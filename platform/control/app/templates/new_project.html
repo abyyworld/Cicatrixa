@@ -30,7 +30,9 @@
       gets <span class="green">&lt;project&gt;.{{ base_domain }}</span>; the rest get
       <span class="green">&lt;project&gt;-&lt;repo&gt;.{{ base_domain }}</span></p>
     {% if connection and connection.kind == 'app' %}
-    <p class="muted mono" style="font-size:12px">missing a repo? <a href="/connect/github/start">adjust the installation</a></p>
+    <p class="muted mono" style="font-size:12px">missing a repo?
+      <a href="/connect/github/start" target="_blank">adjust the installation ↗</a>
+      — add the repo on GitHub, then <a href="/projects/new">refresh this page</a>.</p>
     {% endif %}
     <label>project name <span style="text-transform:none">(optional — becomes the subdomain)</span></label>
     <input type="text" name="name" placeholder="my-app">
