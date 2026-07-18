@@ -675,6 +675,9 @@ def delete_service(service):
     shutil.rmtree(os.path.join(WORK_ROOT, service["slug"]), ignore_errors=True)
     db.q("DELETE FROM deployments WHERE service_id=?", (service["id"],))
     db.q("DELETE FROM services WHERE id=?", (service["id"],))
+    # Remove the GitHub App from this repo so it disappears from the approved list
+    if service.get("repo_full"):
+        gh.revoke_repo(service["repo_full"])
     refresh_project_status(service["project_id"])
 
 
