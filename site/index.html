@@ -64,6 +64,9 @@
     font-weight:650;padding:13px 28px;border-radius:8px;transition:transform .15s,box-shadow .15s;
   }
   .cta:hover,.cta:focus-visible{transform:translateY(-1px);box-shadow:0 8px 30px rgba(64,217,103,.25)}
+  .ctarow{display:flex;gap:18px;justify-content:center;align-items:center;flex-wrap:wrap}
+  .cta2{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;color:var(--muted);text-decoration:none;border-bottom:1px dashed var(--line);padding-bottom:2px;transition:color .2s,border-color .2s}
+  .cta2:hover,.cta2:focus-visible{color:var(--green);border-color:var(--green-dim)}
   .scrollhint{margin-top:56px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;font-size:12px;text-align:center;letter-spacing:.14em}
 
   /* ---------- sections ---------- */
@@ -288,7 +291,7 @@
       <a href="#faq">faq</a>
       <a href="#contact">contact</a>
     </nav>
-    <a class="nav-cta" href="#access">request access →</a>
+    <a class="nav-cta" href="https://app.cicatrixa.com">launch app →</a>
   </div>
 </header>
 
@@ -298,7 +301,10 @@
   <p class="status mono"><span id="status">booting</span><span class="cursor"></span></p>
   <div class="wrap hero-foot">
     <p class="lede">When production breaks, Cicatrixa reproduces the crash as a <strong>failing test</strong>, patches until your whole suite is <strong>green</strong>, and ships through a canary — before your on-call wakes up.</p>
-    <a class="cta" href="#access">Get early access</a>
+    <div class="ctarow">
+      <a class="cta" href="https://app.cicatrixa.com">Try Cicatrixa →</a>
+      <a class="cta2" href="#access">or request a design-partner pilot</a>
+    </div>
     <p class="scrollhint">▼ HOW IT REFUSES TO GUESS</p>
   </div>
 </div>
@@ -383,7 +389,7 @@
 <span class="g">1.</span> point your Sentry / Datadog / CloudWatch webhook at cicatrixa
 <span class="g">2.</span> authorize the GitHub App — repo read, PR write
 <span class="g">3.</span> next incident arrives as a PR with its own failing test
-<span class="c"># invites are limited during beta →</span> <a href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">hello@cicatrixa.com</a></div>
+<span class="c"># or just launch it →</span> <a href="https://app.cicatrixa.com">app.cicatrixa.com</a></div>
     <div class="term termpane hidden" id="pane-self"><span class="c"># full healing loop on your own machine — Docker required</span>
 <span class="g">$</span> git clone https://github.com/Cicatrixa/Cicatrixa.git <b>&amp;&amp;</b> cd Cicatrixa
 <span class="g">$</span> echo "OPENAI_API_KEY=sk-..." &gt; .env
@@ -479,7 +485,10 @@
     <p class="eyebrow">Early access</p>
     <h2>Stop paging humans for bugs<br>a machine can prove.</h2>
     <p class="measure">We're onboarding a small group of design partners. Bring us one real production bug — we'll heal it free, failing test included.</p>
-    <a class="cta" href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">Request early access</a>
+    <div class="ctarow">
+      <a class="cta" href="https://app.cicatrixa.com">Launch Cicatrixa →</a>
+      <a class="cta2" href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">request a pilot instead</a>
+    </div>
   </div>
 </div>
 
