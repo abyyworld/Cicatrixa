@@ -10,11 +10,13 @@ services:
     container_name: traefik
     ports:
       - "80:80"       # platform UI + all user project subdomains
+      - "443:443"     # HTTPS once a router references certResolver: le
       - "8080:8080"   # traefik dashboard (basic-auth, see demo security.yml)
       - "9000:9000"   # healer demo dashboard (basic-auth)
     volumes:
       - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "${DEMO_DYNAMIC_DIR:-/root/Cicatrixa/traefik/dynamic}:/dynamic"
+      - "cx-letsencrypt:/letsencrypt"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     networks: [cxnet, healnet]
     restart: unless-stopped
@@ -53,3 +55,4 @@ services:
 
 volumes:
   cx-data:
+  cx-letsencrypt:

@@ -1,6 +1,8 @@
 entryPoints:
   web:
     address: ":80"
+  websecure:
+    address: ":443"
   dashboard:
     address: ":9000"     # healer demo UI (basic-auth via file provider)
   traefikapi:
@@ -13,6 +15,19 @@ providers:
   file:
     directory: /dynamic
     watch: true
+
+# Inert until a router references certResolver: le (HTTP-01, one cert per
+# hostname on first request) — so this is safe to ship before any router
+# uses it. Cut over BASE_DOMAIN to the real domain first, then add
+# tls.certresolver=le labels; doing it on a domain we don't control (e.g.
+# a shared nip.io) would burn rate limits shared with everyone else on it.
+certificatesResolvers:
+  le:
+    acme:
+      email: ruslanramazonov99@gmail.com
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
 
 api:
   dashboard: true
