@@ -99,18 +99,25 @@
   .interstitial .who{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);margin-top:18px;letter-spacing:.1em}
 
   .stages{list-style:none;counter-reset:st;margin:44px 0 0;padding:0;position:relative}
-  .stages::before{content:"";position:absolute;left:11px;top:14px;bottom:14px;width:1px;background:var(--line)}
+  .stages::before{content:"";position:absolute;left:11px;top:26px;bottom:26px;width:1px;background:var(--line)}
   .stages li{
-    counter-increment:st;position:relative;padding:0 0 36px 52px;
+    counter-increment:st;position:relative;padding:14px 18px 14px 52px;margin-bottom:12px;
+    border:1px solid transparent;border-radius:12px;
+    transition:background .25s,border-color .25s,transform .25s;
   }
-  .stages li:last-child{padding-bottom:0}
+  .stages li:last-child{margin-bottom:0}
   .stages li::before{
-    content:"";position:absolute;left:6px;top:7px;width:11px;height:11px;border-radius:50%;
-    background:var(--bg);border:2px solid var(--muted);
+    content:"";position:absolute;left:6px;top:21px;width:11px;height:11px;border-radius:50%;
+    background:var(--bg);border:2px solid var(--muted);transition:border-color .25s,background .25s,box-shadow .25s;
   }
+  .stages li:hover{background:var(--panel);border-color:var(--line);transform:translateX(4px)}
+  .stages li:hover::before{border-color:var(--ink);background:var(--ink);box-shadow:0 0 10px rgba(228,238,231,.35)}
+  .stages li:hover h3 .idx{color:var(--green)}
+  .stages li.key{background:rgba(64,217,103,.055);border-color:var(--green-dim)}
+  .stages li.key:hover{background:rgba(64,217,103,.1);border-color:var(--green)}
   .stages li.key::before{border-color:var(--green);background:var(--green);box-shadow:0 0 14px rgba(64,217,103,.5)}
   .stages h3{margin:0 0 6px;font-size:16.5px;font-weight:600;display:flex;gap:12px;align-items:baseline}
-  .stages h3 .idx{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .stages h3 .idx{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;transition:color .25s}
   .stages p{margin:0;color:var(--muted);font-size:15px;max-width:36em}
   .stages .key h3{color:var(--green)}
   .stages .key p strong{color:var(--ink)}
@@ -140,6 +147,14 @@
   .final .measure{margin:0 auto 34px}
   footer{border-top:1px solid var(--line);padding:30px 0;color:var(--muted);font-size:13px}
   footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  /* ---------- custom cursor ---------- */
+  html.has-cx, html.has-cx *{cursor:none!important}
+  .cx,.cxd{position:fixed;left:-100px;top:-100px;pointer-events:none;z-index:999;transform:translate(-50%,-50%)}
+  .cx{width:30px;height:30px;border:1.5px solid rgba(64,217,103,.55);border-radius:50%;
+      transition:width .18s,height .18s,border-color .18s}
+  .cx.on{width:52px;height:52px;border-color:var(--green);box-shadow:0 0 18px rgba(64,217,103,.25)}
+  .cxd{width:4px;height:4px;background:var(--green);border-radius:50%}
 </style>
 
 <header>
@@ -198,25 +213,25 @@
 
   <section class="reveal">
     <p class="eyebrow">Zero infra change</p>
-    <h2>Installs in minutes.<br>Runs in our sandboxes, not your prod.</h2>
-    <p class="measure">No agents on your servers. No Docker to operate. Reproduction and patching happen in our isolated runners; the output lands in your repo as an ordinary pull request. <strong>Approving the PR is the deploy.</strong></p>
+    <h2>Nothing to install.<br>Runs in our sandboxes, not your prod.</h2>
+    <p class="measure">No downloads, no desktop app, no agents on your servers, no Docker to operate. Two authorizations in the browser and you're live. Reproduction and patching happen in our isolated runners; the output lands in your repo as an ordinary pull request. <strong>Approving the PR is the deploy.</strong></p>
     <div class="steps">
-      <div class="step"><span class="k">STEP 1</span><h3>Point your alerts at us</h3><p>A Sentry, Datadog, or CloudWatch webhook. Five minutes, reversible any time.</p></div>
-      <div class="step"><span class="k">STEP 2</span><h3>Install the GitHub App</h3><p>Repo read, pull-request write. Nothing else. Nothing touches your infrastructure.</p></div>
+      <div class="step"><span class="k">STEP 1</span><h3>Point your alerts at us</h3><p>Paste one webhook into Sentry, Datadog, or CloudWatch — the tools you already run. Five minutes, reversible any time.</p></div>
+      <div class="step"><span class="k">STEP 2</span><h3>Connect GitHub — two clicks</h3><p>The same authorize button you've clicked for CI. Repo read, pull-request write, nothing else ever touches your infrastructure.</p></div>
       <div class="step"><span class="k">STEP 3</span><h3>Wake up to proof</h3><p>Each incident becomes a PR: failing test + minimal fix + green suite + canary plan.</p></div>
     </div>
   </section>
 
   <section class="reveal">
     <p class="eyebrow">Where we sit</p>
-    <h2>Copilots explain. Autofixers guess.<br>We prove, then ship.</h2>
+    <h2>Assistants explain. Autofixers guess.<br>We prove, then ship.</h2>
     <div class="tablewrap">
       <table>
         <thead>
           <tr>
             <th scope="col"></th>
             <th scope="col">strong model in a terminal</th>
-            <th scope="col">AI SRE copilots</th>
+            <th scope="col">AI SRE assistants</th>
             <th scope="col" class="us">cicatrixa</th>
           </tr>
         </thead>
@@ -245,7 +260,7 @@
 <footer>
   <div class="wrap">
     <span><span class="mono"><span style="color:var(--red)">cica</span><span style="color:var(--green)">trixa</span></span> · autonomous site reliability</span>
-    <span class="mono">exit code 0 · © 2026 Cicatrixa</span>
+    <span class="mono">© 2026 Cicatrixa</span>
   </div>
 </footer>
 
@@ -258,13 +273,17 @@
   var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   var RED = [255,82,87], GREEN = [64,217,103], DIM = [96,112,103];
+  // sequence: brand name first (split-colored like the wordmark), then FAILED→PASSED forever
   var WORDS = [
-    {text:"✗ FAILED", color:RED,   status:"incident detected · ZeroDivisionError · orders-api"},
-    {text:"✓ PASSED", color:GREEN, status:"healed · suite 14/14 green · canary promoted 100%"}
+    {text:"cicatrixa", split:true, status:"the AI SRE that proves the fix before shipping it"},
+    {text:"FAILED", color:RED,   status:"incident detected · ZeroDivisionError · orders-api"},
+    {text:"PASSED", color:GREEN, status:"healed · suite 14/14 green · canary promoted 100%"}
   ];
+  var HOLD = [3000, 1900, 2700];
+  var ASSEMBLE = 1500, SCATTER = 1200;
   var SCATTER_STATUS = ["watchdog","diagnose","reproduce ← proof","fix","verify","canary"];
 
-  var W=0, H=0, DPR=1, particles=[], targets=[[],[]];
+  var W=0, H=0, DPR=1, particles=[], targets=[[],[],[]], splitX=0;
   var mouse = {x:-9999, y:-9999};
 
   function resize(){
@@ -272,8 +291,10 @@
     W = canvas.clientWidth; H = canvas.clientHeight;
     canvas.width = W*DPR; canvas.height = H*DPR;
     ctx.setTransform(DPR,0,0,DPR,0,0);
-    targets = WORDS.map(function(w){ return sample(w.text); });
-    var n = Math.min(3000, Math.max(targets[0].length, targets[1].length));
+    targets = WORDS.map(function(w){ return sample(w.text, !!w.split); });
+    var n = 0;
+    targets.forEach(function(t){ n = Math.max(n, t.length); });
+    n = Math.min(3000, n);
     while(particles.length < n) particles.push({
       x:Math.random()*W, y:Math.random()*H, vx:0, vy:0,
       c:DIM.slice(), j:Math.random()*6.28
@@ -281,7 +302,7 @@
     particles.length = n;
   }
 
-  function sample(text){
+  function sample(text, markSplit){
     var off = document.createElement("canvas");
     off.width = W; off.height = H;
     var o = off.getContext("2d");
@@ -289,6 +310,10 @@
     o.font = "700 "+size+"px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
     o.textAlign="center"; o.textBaseline="middle";
     o.fillStyle="#fff"; o.fillText(text, W/2, H/2);
+    if(markSplit){
+      var tw = o.measureText(text).width;
+      splitX = W/2 - tw/2 + o.measureText("cica").width;
+    }
     var data = o.getImageData(0,0,W,H).data;
     var gap = Math.max(3, Math.round(Math.sqrt((W*H)/26000)));
     var pts = [];
@@ -302,23 +327,27 @@
     return pts;
   }
 
-  // phase machine: 0 assemble w0, 1 hold, 2 scatter, 3 assemble w1, 4 hold, 5 scatter
-  var DUR = [1500, 2100, 1300, 1500, 2600, 1300];
+  // phase machine per word: 0 assemble, 1 hold, 2 scatter
+  var order = [0,1,2], oi = 0, intro = true;
   var phase = 0, phaseT = 0, last = 0, scatterIdx = 0, scatterTick = 0;
-
-  function wordOf(p){ return (p<3) ? 0 : 1; }
 
   function step(now){
     var dt = Math.min(32, now-last); last = now;
     phaseT += dt;
-    if(phaseT >= DUR[phase]){
-      phaseT = 0; phase = (phase+1)%6;
-      if(phase===0||phase===3){ /* new assembly */ }
-      if(phase===1) statusEl.textContent = WORDS[0].status;
-      if(phase===4) statusEl.textContent = WORDS[1].status;
-      if(phase===2||phase===5){ scatterIdx=0; scatterTick=0; }
+    var limit = phase===0 ? ASSEMBLE : phase===1 ? HOLD[order[oi]] : SCATTER;
+    if(phaseT >= limit){
+      phaseT = 0; phase = (phase+1)%3;
+      if(phase===1) statusEl.textContent = WORDS[order[oi]].status;
+      if(phase===2){ scatterIdx=0; scatterTick=0; }
+      if(phase===0){
+        oi++;
+        if(oi >= order.length){
+          if(intro){ intro = false; order = [1,2]; } // name shown once; loop FAILED→PASSED
+          oi = 0;
+        }
+      }
     }
-    if(phase===2||phase===5){
+    if(phase===2){
       scatterTick += dt;
       if(scatterTick > 210){
         scatterTick = 0;
@@ -327,16 +356,13 @@
       }
     }
 
-    var w = wordOf(phase);
-    var pts = targets[w];
-    var col = (phase===2||phase===5) ? DIM : WORDS[w].color;
-    var assembling = (phase!==2 && phase!==5);
+    var wi = order[oi], word = WORDS[wi], pts = targets[wi];
+    var scattering = (phase===2);
 
     ctx.clearRect(0,0,W,H);
     for(var i=0;i<particles.length;i++){
-      var p = particles[i];
-      if(assembling){
-        var t = pts[i % pts.length];
+      var p = particles[i], t = pts[i % pts.length];
+      if(!scattering){
         p.vx += (t[0]-p.x)*0.055; p.vy += (t[1]-p.y)*0.055;
         p.vx *= 0.82; p.vy *= 0.82;
       } else {
@@ -351,7 +377,8 @@
         p.vx += dx/d*f; p.vy += dy/d*f;
       }
       p.x += p.vx; p.y += p.vy;
-      // color ease
+      // color ease — the brand word is split red/green at the cica|trixa boundary
+      var col = scattering ? DIM : (word.split ? (t[0] < splitX ? RED : GREEN) : word.color);
       p.c[0]+=(col[0]-p.c[0])*0.06; p.c[1]+=(col[1]-p.c[1])*0.06; p.c[2]+=(col[2]-p.c[2])*0.06;
       ctx.fillStyle = "rgb("+(p.c[0]|0)+","+(p.c[1]|0)+","+(p.c[2]|0)+")";
       ctx.fillRect(p.x, p.y, 2.1, 2.1);
@@ -360,12 +387,14 @@
   }
 
   function staticRender(){
-    // reduced motion: draw the healed state, no animation
+    // reduced motion: draw the brand name, split-colored, no animation
     ctx.clearRect(0,0,W,H);
-    var pts = targets[1];
-    ctx.fillStyle = "rgb("+GREEN.join(",")+")";
-    for(var i=0;i<pts.length;i++) ctx.fillRect(pts[i][0], pts[i][1], 2.1, 2.1);
-    statusEl.textContent = WORDS[1].status;
+    var pts = targets[0];
+    for(var i=0;i<pts.length;i++){
+      ctx.fillStyle = pts[i][0] < splitX ? "rgb("+RED.join(",")+")" : "rgb("+GREEN.join(",")+")";
+      ctx.fillRect(pts[i][0], pts[i][1], 2.1, 2.1);
+    }
+    statusEl.textContent = WORDS[0].status;
   }
 
   canvas.addEventListener("pointermove", function(e){
@@ -382,7 +411,7 @@
 
   resize();
   if(reduced){ staticRender(); }
-  else { statusEl.textContent = "incident detected · ZeroDivisionError · orders-api"; requestAnimationFrame(function(t){ last=t; requestAnimationFrame(step); }); }
+  else { statusEl.textContent = WORDS[0].status; requestAnimationFrame(function(t){ last=t; requestAnimationFrame(step); }); }
 
   // scroll reveals
   var els = document.querySelectorAll(".reveal");
@@ -393,6 +422,26 @@
       entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add("in"); io.unobserve(en.target); } });
     }, {threshold:0.12});
     els.forEach(function(el){ io.observe(el); });
+  }
+
+  // custom cursor — desktop fine pointers only
+  if(matchMedia("(pointer: fine)").matches && !reduced){
+    var ring = document.createElement("div"); ring.className = "cx";
+    var dot = document.createElement("div"); dot.className = "cxd";
+    document.body.appendChild(ring); document.body.appendChild(dot);
+    document.documentElement.classList.add("has-cx");
+    var cxx = innerWidth/2, cxy = innerHeight/2, ctx2 = cxx, cty = cxy;
+    addEventListener("pointermove", function(e){
+      ctx2 = e.clientX; cty = e.clientY;
+      dot.style.left = ctx2+"px"; dot.style.top = cty+"px";
+      var el = e.target && e.target.closest ? e.target.closest("a,button,.step,.stages li") : null;
+      ring.classList.toggle("on", !!el);
+    }, {passive:true});
+    (function follow(){
+      cxx += (ctx2-cxx)*0.16; cxy += (cty-cxy)*0.16;
+      ring.style.left = cxx+"px"; ring.style.top = cxy+"px";
+      requestAnimationFrame(follow);
+    })();
   }
 })();
 </script>
