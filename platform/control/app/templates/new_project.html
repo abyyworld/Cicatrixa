@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}New project — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:20px auto">
+  <div class="lbl-caps">intake — new admission</div>
+  <h1>New <em>project</em></h1>
+  <p class="sub">Pick one repo — or several (frontend + backend + …). Each repo becomes its
+  own service with its own subdomain, and services get env vars pointing at each other.</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+
+  <form method="post" action="/projects" class="card">
+    <label>repositories <span style="text-transform:none">(check all that belong to this project)</span></label>
+    <input type="text" placeholder="filter…" oninput="filterRepos(this.value)" style="margin-bottom:8px">
+    <div id="repolist" style="max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel2)">
+      {% for r in repos %}
+      <div class="repo-row" data-name="{{ r.full_name | lower }}"
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)">
+        <input type="checkbox" name="repos" value="{{ r.full_name }}" id="cb-{{ loop.index }}"
+               onchange="repoToggled()">
+        <label for="cb-{{ loop.index }}" style="margin:0;text-transform:none;letter-spacing:0;font-size:13.5px;color:var(--ink);cursor:pointer;flex:1">
+          {{ r.full_name }}{% if r.private %} 🔒{% endif %}</label>
+        <span class="primary-pick mono muted" style="font-size:11px;display:none">
+          <input type="radio" name="primary" value="{{ r.full_name }}" id="pr-{{ loop.index }}"
+                 style="vertical-align:middle"> <label for="pr-{{ loop.index }}"
+                 style="display:inline;margin:0;text-transform:none;cursor:pointer">main</label></span>
+      </div>
+      {% endfor %}
+    </div>
+    <p class="muted mono" style="font-size:12px;margin:8px 0 0">the service marked <b>main</b>
+      gets <span class="green">&lt;project&gt;.{{ base_domain }}</span>; the rest get
+      <span class="green">&lt;project&gt;-&lt;repo&gt;.{{ base_domain }}</span></p>
+    {% if connection and connection.kind == 'app' %}
+    <p class="muted mono" style="font-size:12px">missing a repo? <a href="/connect/github/start">adjust the installation</a></p>
+    {% endif %}
+    <label>project name <span style="text-transform:none">(optional — becomes the subdomain)</span></label>
+    <input type="text" name="name" placeholder="my-app">
+    <label>branch <span style="text-transform:none">(optional — blank uses each repo's default branch)</span></label>
+    <input type="text" name="branch" placeholder="">
+    <div style="margin-top:22px"><button class="btn">Deploy →</button></div>
+  </form>
+</div>
+<script>
+function filterRepos(q){
+  q = q.toLowerCase();
+  for (const row of document.querySelectorAll('.repo-row'))
+    row.style.display = row.dataset.name.includes(q) ? 'flex' : 'none';
+}
+function repoToggled(){
+  const rows = [...document.querySelectorAll('.repo-row')];
+  let primaryStillValid = false;
+  for (const row of rows) {
+    const cb = row.querySelector('input[type=checkbox]');
+    const pick = row.querySelector('.primary-pick');
+    const radio = row.querySelector('input[type=radio]');
+    pick.style.display = cb.checked ? 'inline' : 'none';
+    if (!cb.checked) radio.checked = false;
+    if (cb.checked && radio.checked) primaryStillValid = true;
+  }
+  if (!primaryStillValid) {
+    const first = rows.find(r => r.querySelector('input[type=checkbox]').checked);
+    if (first) first.querySelector('input[type=radio]').checked = true;
+  }
+}
+</script>
+{% endblock %}

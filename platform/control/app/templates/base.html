@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Cicatrixa{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ————— Cicatrixa design system: “the clinical chart” —————
+     cicatrix (n.) — the scar of a healed wound.
+     Warm paper, ink, arterial red; sutures for seams; vitals for status. */
+  :root{
+    --paper:#F4EFE6; --paper2:#ECE4D4; --card:#FAF6EE;
+    --ink:#1C1917; --ink2:#6B6257; --rule:#D3C8B4; --rule2:#B8AB92;
+    --scar:#B0261C; --healed:#1E7A4C; --amber:#A8730A;
+    --monitor:#161310; --monitor-ink:#C9BFA9;
+    /* aliases kept for shared components */
+    --bg:var(--paper); --panel:var(--card); --panel2:var(--paper2);
+    --line:var(--rule); --muted:var(--ink2);
+    --red:var(--scar); --green:var(--healed); --green-dim:#CFE0D2;
+    --serif:"Instrument Serif",Georgia,serif;
+    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:15.5px/1.65 var(--mono);-webkit-font-smoothing:antialiased}
+  .serif{font-family:var(--serif)}
+  .mono{font-family:var(--mono)}
+  a{color:inherit}
+  ::selection{background:var(--scar);color:var(--paper)}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+
+  /* chart chrome: metadata strip + masthead */
+  .chartline{border-bottom:1px solid var(--ink);font:11px/1 var(--mono);
+    letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}
+  .chartline .wrap{display:flex;gap:26px;padding:7px 24px;flex-wrap:wrap}
+  .chartline b{color:var(--ink);font-weight:500}
+  header.masthead{border-bottom:1px solid var(--ink);background:var(--paper);
+    position:sticky;top:0;z-index:20}
+  .nav{display:flex;align-items:center;height:62px;gap:26px}
+  .wordmark{font-family:var(--serif);font-size:26px;letter-spacing:-.01em;
+    text-decoration:none;position:relative;padding-bottom:7px}
+  .wordmark::after{content:"";position:absolute;left:2px;bottom:0;width:64px;height:8px;
+    background-image:url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="16" height="8"%3E%3Cline x1="0" y1="4" x2="16" y2="4" stroke="%23B8AB92" stroke-width="1"/%3E%3Cline x1="5" y1="0" x2="11" y2="8" stroke="%23B0261C" stroke-width="1.4"/%3E%3C/svg%3E');
+    background-repeat:repeat-x}
+  .nav a.lnk{font:12px var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink2);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px}
+  .nav a.lnk:hover{color:var(--scar);border-bottom-color:var(--scar)}
+  .nav .spacer{margin-left:auto}
+
+  /* suture: the seam between sections */
+  .suture{height:12px;margin:34px 0;border:0;
+    background-image:url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="26" height="12"%3E%3Cline x1="0" y1="6" x2="26" y2="6" stroke="%23B8AB92" stroke-width="1"/%3E%3Cline x1="9" y1="1" x2="17" y2="11" stroke="%23B0261C" stroke-width="1.6"/%3E%3C/svg%3E');
+    background-repeat:repeat-x;background-position:center}
+
+  main{padding:40px 0 90px}
+  h1{font-family:var(--serif);font-weight:400;font-size:40px;line-height:1.08;
+    letter-spacing:-.01em;margin:0 0 8px}
+  h1 em,.accent-i{font-style:italic;color:var(--scar)}
+  h2{font-family:var(--serif);font-weight:400;font-size:24px;margin:40px 0 14px}
+  p.sub{color:var(--ink2);margin:0 0 26px;font-size:14px}
+  .lbl-caps{font:11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink2)}
+
+  .card{background:var(--card);border:1px solid var(--ink);border-radius:2px;padding:22px}
+  .grid{display:grid;gap:14px}
+
+  .btn{display:inline-block;font:12.5px var(--mono);font-weight:600;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--paper);background:var(--scar);
+    border:1px solid var(--ink);border-radius:2px;padding:10px 20px;text-decoration:none;
+    cursor:pointer;box-shadow:3px 3px 0 var(--ink);transition:transform .08s,box-shadow .08s}
+  .btn:hover{transform:translate(1px,1px);box-shadow:2px 2px 0 var(--ink)}
+  .btn:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--ink)}
+  .btn.ghost{background:var(--card);color:var(--ink)}
+  .btn.danger{background:var(--card);color:var(--scar)}
+  .btn.sm{padding:6px 12px;font-size:11px;box-shadow:2px 2px 0 var(--ink)}
+  .btn.sm:hover{box-shadow:1px 1px 0 var(--ink)}
+
+  input[type=text],input[type=email],input[type=password],select{
+    width:100%;background:var(--card);border:1px solid var(--ink);border-radius:2px;
+    color:var(--ink);padding:10px 12px;font:14px var(--mono);outline:none}
+  input:focus,select:focus{box-shadow:2px 2px 0 var(--rule2)}
+  label{display:block;font:11px var(--mono);letter-spacing:.14em;color:var(--ink2);
+    margin:16px 0 6px;text-transform:uppercase}
+  .err{color:var(--scar);font:13px var(--mono);border:1px solid var(--scar);
+    background:#F3E2DE;border-radius:2px;padding:10px 14px;margin:14px 0}
+
+  /* status: stamped vitals — symbol + word, never color alone */
+  .pill{display:inline-block;font:10.5px var(--mono);font-weight:600;padding:3px 9px;
+    border-radius:2px;border:1px solid var(--ink2);color:var(--ink2);
+    text-transform:uppercase;letter-spacing:.12em;transform:rotate(-1deg)}
+  .pill.live{color:var(--healed);border-color:var(--healed)}
+  .pill.live::before{content:"● "}
+  .pill.deploying,.pill.degraded{color:var(--amber);border-color:var(--amber)}
+  .pill.deploying::before{content:"◐ "} .pill.degraded::before{content:"◭ "}
+  .pill.failed{color:var(--scar);border-color:var(--scar)}
+  .pill.failed::before{content:"✕ "}
+  .pill.stopped::before,.pill.new::before{content:"○ "}
+
+  /* the monitor: logs render on an instrument screen set into the paper */
+  .term{background:var(--monitor);border:1px solid var(--ink);border-radius:2px;
+    box-shadow:inset 0 0 0 3px #241F19,3px 3px 0 var(--ink);
+    padding:16px 18px;font:12.5px/1.75 var(--mono);color:var(--monitor-ink);
+    white-space:pre-wrap;word-break:break-word;max-height:460px;overflow-y:auto}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font:10.5px var(--mono);font-weight:600;text-transform:uppercase;letter-spacing:.14em;
+    color:var(--ink2);text-align:left;padding:8px 10px;border-bottom:1px solid var(--ink)}
+  td{padding:10px;border-bottom:1px solid var(--rule)}
+  .muted{color:var(--ink2)} .green{color:var(--healed)} .red{color:var(--scar)}
+  code{font:.9em var(--mono);background:var(--paper2);border:1px solid var(--rule);
+    border-radius:2px;padding:1px 6px}
+
+  /* vitals meters */
+  .meter{min-width:170px;flex:1}
+  .meter .lbl{display:flex;justify-content:space-between;gap:14px;font:10.5px var(--mono);
+    color:var(--ink2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;
+    white-space:nowrap}
+  .meter .track{height:7px;background:var(--paper2);border:1px solid var(--ink);
+    border-radius:1px;overflow:hidden}
+  .meter .fill{height:100%;background:var(--healed)}
+  .meter .fill.warn{background:var(--amber)} .meter .fill.crit{background:var(--scar)}
+</style>
+{% block head %}{% endblock %}
+</head>
+<body>
+<div class="chartline"><div class="wrap">
+  <span>chart № cx-{{ user.id if user else '000' }}</span>
+  <span>facility: <b>cicatrixa</b> · self-healing hosting</span>
+  <span style="margin-left:auto">status: <b style="color:var(--healed)">under continuous observation</b></span>
+</div></div>
+<header class="masthead"><div class="wrap nav">
+  <a class="wordmark" href="/">Cicatrixa</a>
+  {% if user %}
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    {% if user.is_admin %}<a class="lnk" href="/admin">Admin</a>{% endif %}
+    <span class="spacer"></span>
+    <span class="lnk" style="cursor:default;border:none">{{ user.email }}</span>
+    <form method="post" action="/logout" style="margin:0"><button class="btn ghost sm">Log out</button></form>
+  {% else %}
+    <span class="spacer"></span>
+    <a class="lnk" href="/login">Log in</a>
+    <a class="btn sm" href="/signup">Sign up</a>
+  {% endif %}
+</div></header>
+<main><div class="wrap">{% block content %}{% endblock %}</div></main>
+</body>
+</html>

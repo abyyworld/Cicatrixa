@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Cicatrixa — hosting that heals itself{% endblock %}
+{% block head %}
+<style>
+  .hero{padding:64px 0 10px}
+  .hero .lbl-caps{display:flex;gap:18px;flex-wrap:wrap}
+  .hero h1{font-size:clamp(44px,7.2vw,84px);max-width:12em;margin-top:18px}
+  .hero .lede{max-width:34em;font-size:15px;color:var(--ink2);margin:22px 0 30px}
+  .defn{border-left:3px solid var(--scar);padding:2px 0 2px 14px;margin:26px 0;
+    font-family:var(--serif);font-size:17px;font-style:italic;color:var(--ink2);max-width:30em}
+  .defn b{color:var(--ink);font-style:normal}
+
+  /* vitals strip: flatline -> incident -> healed rhythm */
+  .ekg-frame{border:1px solid var(--ink);border-radius:2px;background:var(--card);
+    box-shadow:4px 4px 0 var(--ink);margin:44px 0 8px;overflow:hidden}
+  .ekg-head{display:flex;gap:22px;padding:8px 14px;border-bottom:1px solid var(--rule);
+    font:10.5px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}
+  .ekg-head .liveled{color:var(--healed)}
+  .ekg-head .liveled::before{content:"●";animation:blink 1.4s step-end infinite;margin-right:5px}
+  @keyframes blink{50%{opacity:.15}}
+  svg.ekg{display:block;width:100%;height:120px}
+  .ekg .beat{fill:none;stroke:var(--healed);stroke-width:2}
+  .ekg .crash{fill:none;stroke:var(--scar);stroke-width:2}
+  .ekg .trace{stroke-dasharray:1200;stroke-dashoffset:1200;animation:draw 7s linear infinite}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .ekg text{font:10px var(--mono);fill:var(--ink2);letter-spacing:.1em}
+
+  .ledger{border:1px solid var(--ink);border-radius:2px;background:var(--card)}
+  .ledger .row{display:grid;grid-template-columns:74px 200px 1fr;gap:18px;
+    padding:20px 22px;border-bottom:1px solid var(--rule);align-items:baseline}
+  .ledger .row:last-child{border-bottom:0}
+  .ledger .no{font-family:var(--serif);font-style:italic;font-size:30px;color:var(--scar)}
+  .ledger .op{font:12px var(--mono);font-weight:600;letter-spacing:.14em;text-transform:uppercase}
+  .ledger .desc{font-size:13.5px;color:var(--ink2)}
+  @media (max-width:720px){.ledger .row{grid-template-columns:52px 1fr}.ledger .desc{grid-column:2}}
+
+  .vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+  .vitals .card h3{font-family:var(--serif);font-weight:400;font-size:20px;margin:0 0 8px}
+  .vitals .card p{font-size:13px;color:var(--ink2);margin:0}
+  .bigcta{text-align:center;padding:56px 0 8px}
+  .bigcta .serif{font-size:clamp(28px,4vw,44px)}
+  .stamp-note{font:11px var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--ink2);margin-top:14px}
+</style>
+{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="lbl-caps"><span>admission form</span><span>·</span>
+    <span>ai-operated hosting</span><span>·</span><span>est. every deploy</span></div>
+  <h1>Your app will crash.<br>It will <em>heal</em> before<br>you hear about it.</h1>
+  <div class="defn"><b>cicatrix</b> (n.) — the scar tissue of a wound that has healed itself.</div>
+  <p class="lede">Point Cicatrixa at a GitHub repo — or several. The AI works out how to run
+    them, builds the containers, wires the subdomains, and verifies the result. Then it stays
+    at the bedside: every push redeploys, every crash is diagnosed and repaired, every failure
+    leaves a scar report instead of a pager alert.</p>
+  <a class="btn" href="/signup">Admit your first repo →</a>
+  <a class="btn ghost" style="margin-left:10px" href="/login">Log in</a>
+
+  <div class="ekg-frame">
+    <div class="ekg-head">
+      <span class="liveled">monitoring</span>
+      <span>patient: your-app.{{ base_domain }}</span>
+      <span style="margin-left:auto">lead ii · continuous</span>
+    </div>
+    <svg class="ekg" viewBox="0 0 1000 120" preserveAspectRatio="none" aria-label="heartbeat trace: normal rhythm, an incident, then healed rhythm">
+      <path class="beat trace" d="M0,60 L80,60 92,60 100,34 108,86 116,60 190,60 202,60 210,34 218,86 226,60 300,60 330,60" />
+      <path class="crash trace" style="animation-delay:.4s" d="M330,60 L360,60 372,18 384,102 396,30 404,95 412,60 470,60 620,60" />
+      <path class="beat trace" style="animation-delay:.8s" d="M620,60 L640,60 652,60 660,34 668,86 676,60 750,60 762,60 770,34 778,86 786,60 870,60 882,60 890,34 898,86 906,60 1000,60" />
+      <text x="345" y="112">incident 04:12:07</text>
+      <text x="628" y="112">healed 04:14:31 — no human woken</text>
+    </svg>
+  </div>
+  <div class="lbl-caps" style="text-align:right">fig. 1 — production vitals, a normal night</div>
+</section>
+
+<hr class="suture">
+
+<section>
+  <h2>The procedure</h2>
+  <p class="sub">Five operations, performed autonomously, recorded on the chart.</p>
+  <div class="ledger">
+    <div class="row"><span class="no">01</span><span class="op">Admission</span>
+      <span class="desc">Connect GitHub in one click, pick a repo — or compose a project from
+      several: frontend, backend, workers. Each becomes its own service.</span></div>
+    <div class="row"><span class="no">02</span><span class="op">Diagnosis</span>
+      <span class="desc">The AI reads the repository like a chart: framework, entry point,
+      ports. No Dockerfile? It writes one.</span></div>
+    <div class="row"><span class="no">03</span><span class="op">Operation</span>
+      <span class="desc">Containers are built and started on a sealed internal network —
+      no port numbers, no conflicts, ever. Your subdomain routes itself.</span></div>
+    <div class="row"><span class="no">04</span><span class="op">Observation</span>
+      <span class="desc">The deploy is probed and smoke-tested; the AI signs off on the result
+      in writing. Failures are diagnosed from the logs, patched, and retried.</span></div>
+    <div class="row"><span class="no">05</span><span class="op">Recovery</span>
+      <span class="desc">Watchdogs keep vigil: pushes redeploy in seconds, dead containers are
+      revived, chronic failures are rebuilt from source. The old version serves until the new
+      one proves healthy.</span></div>
+  </div>
+</section>
+
+<hr class="suture">
+
+<section>
+  <h2>Kept under observation</h2>
+  <p class="sub">Three watchdogs, one promise: you find out it broke <i>after</i> it's fixed.</p>
+  <div class="vitals">
+    <div class="card"><h3>Push reflex</h3>
+      <p>GitHub webhooks land the moment you push; the changed service — only that one —
+      rebuilds and swaps in blue/green.</p></div>
+    <div class="card"><h3>Pulse check</h3>
+      <p>Every minute, every container. Flatline → restart. Restart twice and still dying →
+      full rebuild from source.</p></div>
+    <div class="card"><h3>Metabolic limits</h3>
+      <p>RAM and storage are metered per account with hard caps per container. One tenant
+      can never starve another.</p></div>
+  </div>
+</section>
+
+<hr class="suture">
+
+<section class="bigcta">
+  <div class="serif">From <span class="accent-i">git push</span> to healed-by-default production.</div>
+  <div style="margin-top:26px"><a class="btn" href="/signup">Admit your first repo →</a></div>
+  <div class="stamp-note">no credit card · live at <b>your-project.{{ base_domain }}</b> in minutes</div>
+</section>
+{% endblock %}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_meter.html" import meter %}
+{% block title %}Dashboard — Cicatrixa{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;gap:16px">
+  <div>
+    <div class="lbl-caps">the ward — all patients</div>
+    <h1>Projects</h1>
+    <p class="sub" style="margin-bottom:0">
+      {% if connection %}
+        GitHub connected
+        {% if connection.kind == 'app' %}(App install #{{ connection.installation_id }}){% else %}(token{% if connection.gh_login %} · @{{ connection.gh_login }}{% endif %}){% endif %}
+      {% else %}GitHub not connected yet{% endif %}
+    </p>
+  </div>
+  <span style="margin-left:auto"></span>
+  {% if connection %}
+    <form method="post" action="/connect/github/disconnect" style="margin:0">
+      <button class="btn ghost sm">disconnect github</button></form>
+  {% else %}
+    <a class="btn sm" href="/connect/github">connect github</a>
+  {% endif %}
+  <a class="btn" href="/projects/new">+ new project</a>
+</div>
+
+<div class="card" style="margin-top:22px;display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px">
+  {{ meter("services", usage.services, quota.services,
+           (usage.services / quota.services * 100) if quota.services else 0) }}
+  {{ meter("ram (reserved)", usage.ram_reserved_mb ~ "MB", quota.ram_mb ~ "MB",
+           (usage.ram_reserved_mb / quota.ram_mb * 100) if quota.ram_mb else 0) }}
+  {{ meter("ram (in use)", fmt_bytes(usage.ram_bytes), quota.ram_mb ~ "MB",
+           (usage.ram_bytes / 1048576 / quota.ram_mb * 100) if quota.ram_mb else 0) }}
+  {{ meter("storage", fmt_bytes(usage.disk_bytes), quota.disk_mb ~ "MB",
+           (usage.disk_bytes / 1048576 / quota.disk_mb * 100) if quota.disk_mb else 0) }}
+</div>
+
+<div class="grid" style="margin-top:16px">
+{% if not projects %}
+  <div class="card" style="text-align:center;padding:48px">
+    <div class="serif" style="font-size:28px;font-style:italic">The ward is empty.</div>
+    <p class="muted">No projects yet.
+    {% if connection %}Pick a repo and the AI takes it from there.{% else %}Connect your GitHub account to get started.{% endif %}</p>
+    <a class="btn" href="{% if connection %}/projects/new{% else %}/connect/github{% endif %}">
+      {% if connection %}Create your first project{% else %}Connect GitHub{% endif %}</a>
+  </div>
+{% endif %}
+{% for p in projects %}
+  {% set svcs = services_by_project.get(p.id, []) %}
+  <a href="/projects/{{ p.id }}" class="card" style="text-decoration:none;display:flex;align-items:center;gap:18px">
+    <div>
+      <div style="font-size:16px;font-weight:600">{{ p.name }}</div>
+      <div class="mono muted" style="font-size:12.5px;margin-top:3px">
+        {% for s in svcs %}{{ s.name }} ({{ s.repo_full }}){% if not loop.last %} · {% endif %}{% endfor %}
+      </div>
+    </div>
+    <span style="margin-left:auto"></span>
+    {% if p.status in ('live', 'degraded') %}
+      <span class="mono green" style="font-size:13px">{{ p.slug }}.{{ base_domain }}</span>
+    {% endif %}
+    <span class="pill {{ p.status }}">{{ p.status }}</span>
+  </a>
+{% endfor %}
+</div>
+{% endblock %}

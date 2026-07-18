@@ -1,0 +1,7 @@
+{% macro meter(label, used_str, quota_str, pct) %}
+<div class="meter">
+  <div class="lbl"><span>{{ label }}</span><span>{{ used_str }} / {{ quota_str }}</span></div>
+  <div class="track"><div class="fill {% if pct >= 90 %}crit{% elif pct >= 70 %}warn{% endif %}"
+       style="width:{{ [pct, 100] | min }}%"></div></div>
+</div>
+{% endmacro %}

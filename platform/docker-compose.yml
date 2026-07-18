@@ -1,0 +1,55 @@
+networks:
+  cxnet:
+    name: cxnet
+  healnet:
+    external: true    # the self-heal demo's network; traefik routes demo.* into it
+
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: traefik
+    ports:
+      - "80:80"       # platform UI + all user project subdomains
+      - "8080:8080"   # traefik dashboard (basic-auth, see demo security.yml)
+      - "9000:9000"   # healer demo dashboard (basic-auth)
+    volumes:
+      - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
+      - "${DEMO_DYNAMIC_DIR:-/root/Cicatrixa/traefik/dynamic}:/dynamic"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks: [cxnet, healnet]
+    restart: unless-stopped
+
+  control:
+    build: ./control
+    container_name: cx-control
+    environment:
+      - BASE_DOMAIN=${BASE_DOMAIN}
+      - BASE_URL=${BASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-gpt-5.1-codex-mini}
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
+      - CX_NETWORK=cxnet
+      - DEFAULT_QUOTA_SERVICES=${DEFAULT_QUOTA_SERVICES:-5}
+      - DEFAULT_QUOTA_RAM_MB=${DEFAULT_QUOTA_RAM_MB:-2048}
+      - DEFAULT_QUOTA_DISK_MB=${DEFAULT_QUOTA_DISK_MB:-5120}
+      - RAM_PER_CONTAINER_MB=${RAM_PER_CONTAINER_MB:-768}
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "cx-data:/data"
+    networks: [cxnet]
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=cxnet"
+      - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.cx-control.entrypoints=web"
+      - "traefik.http.routers.cx-control.service=cx-control"
+      # catch-all so the bare IP (no Host match) also lands on the platform UI
+      - "traefik.http.routers.cx-control-fallback.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.cx-control-fallback.priority=1"
+      - "traefik.http.routers.cx-control-fallback.entrypoints=web"
+      - "traefik.http.routers.cx-control-fallback.service=cx-control"
+      - "traefik.http.services.cx-control.loadbalancer.server.port=8090"
+
+volumes:
+  cx-data:

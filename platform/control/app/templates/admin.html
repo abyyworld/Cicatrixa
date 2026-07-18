@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% from "_meter.html" import meter %}
+{% block title %}Admin — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:760px;margin:20px auto">
+  <div class="lbl-caps">attending physician — full facility view</div>
+  <h1>Instance <em>admin</em></h1>
+  <p class="sub">Base URL: <code>{{ base_url }}</code> · wildcard: <code>*.{{ base_domain }}</code>
+    · AI: <code>{{ 'on' if ai_on else 'off — set OPENAI_API_KEY' }}</code></p>
+
+  <div class="card" style="display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px;margin-bottom:14px">
+    {% if host.ram_total %}
+      {{ meter("server ram", fmt_bytes(host.ram_used), fmt_bytes(host.ram_total),
+               host.ram_used / host.ram_total * 100) }}
+    {% endif %}
+    {% if host.disk_total %}
+      {{ meter("server disk", fmt_bytes(host.disk_used), fmt_bytes(host.disk_total),
+               host.disk_used / host.disk_total * 100) }}
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-bottom:14px;overflow-x:auto">
+    <h2 style="margin-top:0">Users &amp; quotas</h2>
+    <p class="muted" style="font-size:13px">Defaults: {{ defaults.services }} services ·
+      {{ defaults.ram_mb }}MB RAM · {{ defaults.disk_mb }}MB storage. Blank field = use default.
+      Each container is hard-capped at {{ ram_per_container }}MB RAM by the runtime.</p>
+    <table>
+      <tr><th>user</th><th>services</th><th>ram in use</th><th>storage</th><th>quotas (svc / ram MB / disk MB)</th></tr>
+      {% for row in users_usage %}
+      <tr>
+        <td class="mono" style="font-size:12.5px">{{ row.user.email }}{% if row.user.is_admin %} ★{% endif %}</td>
+        <td class="mono">{{ row.usage.services }}/{{ row.quota.services }}</td>
+        <td class="mono">{{ fmt_bytes(row.usage.ram_bytes) }} <span class="muted">({{ row.usage.ram_reserved_mb }}MB rsvd)</span></td>
+        <td class="mono">{{ fmt_bytes(row.usage.disk_bytes) }}/{{ row.quota.disk_mb }}MB</td>
+        <td>
+          <form method="post" action="/admin/users/{{ row.user.id }}/quota"
+                style="display:flex;gap:6px;margin:0">
+            <input type="text" name="quota_services" value="{{ row.user.quota_services or '' }}"
+                   placeholder="{{ defaults.services }}" style="width:52px;padding:4px 6px">
+            <input type="text" name="quota_ram_mb" value="{{ row.user.quota_ram_mb or '' }}"
+                   placeholder="{{ defaults.ram_mb }}" style="width:64px;padding:4px 6px">
+            <input type="text" name="quota_disk_mb" value="{{ row.user.quota_disk_mb or '' }}"
+                   placeholder="{{ defaults.disk_mb }}" style="width:64px;padding:4px 6px">
+            <button class="btn ghost sm">save</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">GitHub App
+      {% if gh_app_configured %}<span class="pill live" style="margin-left:8px">configured — {{ gh_app_slug }}</span>
+      {% else %}<span class="pill failed" style="margin-left:8px">not configured</span>{% endif %}</h2>
+    {% if gh_app_configured %}
+      <p class="muted">Users can now connect via one-click install. Webhooks are delivered to
+      <code>{{ base_url }}/api/webhooks/github</code>.</p>
+      <p class="muted" style="font-size:13px">If the base domain changes, update the app's
+      webhook &amp; callback URLs at
+      <span class="mono">github.com/settings/apps/{{ gh_app_slug }}</span>, or recreate it below.</p>
+    {% else %}
+      <p class="muted">One click creates a GitHub App under your GitHub account with the right
+      permissions (<code>contents:read</code>, <code>metadata</code>, <code>push</code> events)
+      and registers its credentials here automatically.</p>
+    {% endif %}
+    <form method="post" action="https://github.com/settings/apps/new">
+      <input type="hidden" name="manifest" id="manifest">
+      <button class="btn">{{ 'Recreate GitHub App →' if gh_app_configured else 'Create GitHub App →' }}</button>
+    </form>
+    <details style="margin-top:14px"><summary class="mono muted" style="font-size:12px;cursor:pointer">manifest</summary>
+      <pre class="term" style="margin-top:8px">{{ manifest_json }}</pre></details>
+  </div>
+</div>
+<script>
+document.getElementById('manifest').value = {{ manifest_json | tojson }};
+</script>
+{% endblock %}

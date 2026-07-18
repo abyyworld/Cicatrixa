@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Log in — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:400px;margin:60px auto">
+  <div class="lbl-caps">returning patient</div>
+  <h1>Welcome <em>back</em></h1>
+  <p class="sub">Your services never noticed you were gone.</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="card">
+    <label>email</label>
+    <input type="email" name="email" required autofocus>
+    <label>password</label>
+    <input type="password" name="password" required>
+    <div style="margin-top:20px"><button class="btn" style="width:100%">Log in →</button></div>
+  </form>
+  <p class="muted mono" style="font-size:13px;margin-top:16px">
+    New here? <a href="/signup">Create an account</a></p>
+</div>
+{% endblock %}

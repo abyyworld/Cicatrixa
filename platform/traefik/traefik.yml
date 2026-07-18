@@ -1,0 +1,22 @@
+entryPoints:
+  web:
+    address: ":80"
+  dashboard:
+    address: ":9000"     # healer demo UI (basic-auth via file provider)
+  traefikapi:
+    address: ":8080"     # traefik dashboard (basic-auth via file provider)
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: cxnet
+  file:
+    directory: /dynamic
+    watch: true
+
+api:
+  dashboard: true
+  insecure: false
+
+log:
+  level: INFO

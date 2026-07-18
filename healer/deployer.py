@@ -6,6 +6,7 @@ auto-promotes to 100% or auto-rolls-back.
 """
 import asyncio
 import logging
+import os
 import time
 
 import docker
@@ -151,7 +152,7 @@ class Deployer:
             "http": {
                 "routers": {
                     "orders": {
-                        "rule": "PathPrefix(`/`)",
+                        "rule": os.environ.get("DEMO_ROUTER_RULE", "PathPrefix(`/`)"),
                         "entryPoints": ["web"],
                         "service": "orders-weighted",
                     }

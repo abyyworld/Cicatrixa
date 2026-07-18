@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — Cicatrixa{% endblock %}
+{% block content %}
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+  <div>
+    <div class="lbl-caps">patient chart</div>
+    <h1 style="display:flex;align-items:center;gap:12px">{{ project.name }}
+      <span class="pill {{ project.status }}" id="statuspill">{{ project.status }}</span></h1>
+    <div class="mono muted" style="font-size:13px">
+      {{ services | length }} service{{ 's' if services | length != 1 }}</div>
+  </div>
+  <span style="margin-left:auto"></span>
+  <form method="post" action="/projects/{{ project.id }}/deploy" style="margin:0">
+    <button class="btn">redeploy all</button></form>
+  <form method="post" action="/projects/{{ project.id }}/stop" style="margin:0">
+    <button class="btn ghost">stop all</button></form>
+  <form method="post" action="/projects/{{ project.id }}/delete" style="margin:0"
+        onsubmit="return confirm('Delete project, all services, containers and images?')">
+    <button class="btn danger">delete</button></form>
+</div>
+
+<div class="card" style="margin-top:20px;display:flex;gap:26px;align-items:center;flex-wrap:wrap">
+  <div><span class="mono muted" style="font-size:12px">AUTODEPLOY ON PUSH</span><br>
+    <form method="post" action="/projects/{{ project.id }}/autodeploy" style="margin:4px 0 0">
+      <button class="btn sm {% if not project.autodeploy %}ghost{% endif %}">
+        {{ 'on — every push redeploys' if project.autodeploy else 'off — click to enable' }}</button>
+    </form></div>
+  <div><span class="mono muted" style="font-size:12px">WATCHDOGS</span><br>
+    <span class="mono" style="font-size:13px">webhook + poll + health monitor</span></div>
+  <div><span class="mono muted" style="font-size:12px">SERVICE WIRING</span><br>
+    <span class="mono" style="font-size:13px">API paths bridge onto frontend domains
+      (call a relative <code>/api/…</code> — no CORS) · siblings get
+      <code>&lt;NAME&gt;_URL</code> env + build args</span></div>
+</div>
+
+<h2>Services</h2>
+<div class="grid">
+{% for s in services %}
+  <div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px">
+    <div style="min-width:170px">
+      <div style="font-weight:600">{{ s.name }}</div>
+      <div class="mono muted" style="font-size:12px">{{ s.repo_full }} @ {{ s.branch }}
+        {% if s.last_sha %} · {{ s.last_sha[:8] }}{% endif %}</div>
+    </div>
+    <a class="mono green" style="font-size:13px" href="{{ service_url(s.slug) }}" target="_blank"
+       rel="noopener">{{ s.slug }}.{{ base_domain }} ↗</a>
+    {% if s.port %}<span class="mono muted" style="font-size:12px">port {{ s.port }}</span>{% endif %}
+    {% if service_mem.get(s.slug) %}<span class="mono muted" style="font-size:12px">
+      ram {{ fmt_bytes(service_mem[s.slug]) }}/{{ ram_per_container }}MB</span>{% endif %}
+    {% if service_disk.get(s.slug) %}<span class="mono muted" style="font-size:12px">
+      disk {{ fmt_bytes(service_disk[s.slug]) }}</span>{% endif %}
+    {% if s.api_prefix %}<span class="mono" style="font-size:12px;color:var(--healed)">
+      bridged: {{ s.api_prefix }} on sibling domains</span>{% endif %}
+    <span style="margin-left:auto"></span>
+    <span class="pill {{ s.status }}">{{ s.status }}</span>
+    <form method="post" action="/services/{{ s.id }}/deploy" style="margin:0">
+      <button class="btn ghost sm">redeploy</button></form>
+    {% if services | length > 1 %}
+    <form method="post" action="/services/{{ s.id }}/delete" style="margin:0"
+          onsubmit="return confirm('Remove service {{ s.name }}?')">
+      <button class="btn danger sm">remove</button></form>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+
+<details style="margin-top:14px">
+  <summary class="mono muted" style="font-size:13px;cursor:pointer">+ add another service (repo)</summary>
+  <form method="post" action="/projects/{{ project.id }}/services" class="card" style="margin-top:10px">
+    <label>repository (owner/repo)</label>
+    <input type="text" name="repo" placeholder="you/backend" required>
+    <label>branch (optional)</label>
+    <input type="text" name="branch" placeholder="">
+    <div style="margin-top:14px"><button class="btn sm">Add &amp; deploy →</button></div>
+  </form>
+</details>
+
+<h2>Operative record <span class="lbl-caps" style="margin-left:10px">live monitor</span></h2>
+<div class="term" id="log">{{ latest_log }}</div>
+
+<h2>Deployments</h2>
+<table>
+  <tr><th>#</th><th>service</th><th>commit</th><th>trigger</th><th>status</th><th>when</th></tr>
+  {% for d in deployments %}
+  <tr>
+    <td class="mono">{{ d.id }}</td>
+    <td class="mono">{{ d.service_name }}</td>
+    <td class="mono">{{ (d.sha or '')[:10] or '—' }}</td>
+    <td class="mono muted">{{ d.trigger }}</td>
+    <td class="mono {% if d.status=='success' %}green{% elif d.status=='failed' %}red{% endif %}">{{ d.status }}</td>
+    <td class="mono muted" data-ts="{{ d.created_at }}"></td>
+  </tr>
+  {% endfor %}
+</table>
+
+<script>
+for (const td of document.querySelectorAll('[data-ts]'))
+  td.textContent = new Date(parseFloat(td.dataset.ts) * 1000).toLocaleString();
+
+const log = document.getElementById('log');
+log.scrollTop = log.scrollHeight;
+const es = new EventSource('/projects/{{ project.id }}/events');
+es.addEventListener('log', e => {
+  const d = JSON.parse(e.data);
+  log.textContent += (log.textContent ? '\n' : '') + d.line;
+  log.scrollTop = log.scrollHeight;
+});
+es.addEventListener('status', e => {
+  const s = JSON.parse(e.data).status;
+  const pill = document.getElementById('statuspill');
+  pill.textContent = s; pill.className = 'pill ' + s;
+});
+</script>
+{% endblock %}
