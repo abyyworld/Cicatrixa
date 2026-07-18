@@ -189,6 +189,64 @@
   .final{text-align:center;padding:130px 0 110px}
   .final h2{margin-left:auto;margin-right:auto}
   .final .measure{margin:0 auto 34px}
+  /* ---------- works-with strip ---------- */
+  .stripwrap{border-top:1px solid var(--line);background:var(--panel)}
+  .strip{max-width:1020px;margin:0 auto;display:flex;gap:10px 30px;align-items:center;justify-content:center;flex-wrap:wrap;padding:16px 24px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);letter-spacing:.06em}
+  .strip .lbl{color:#43514a;letter-spacing:.14em;font-size:11px}
+  .strip b{color:var(--ink);font-weight:500}
+  .strip .arrow{color:var(--green)}
+
+  /* ---------- live product window ---------- */
+  .window{border:1px solid var(--line);border-radius:14px;background:#0C1210;box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;margin-top:44px}
+  .winbar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .winbar .dot{width:11px;height:11px;border-radius:50%;background:#26312a}
+  .winbar .t{margin-left:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted)}
+  .winbar .live{margin-left:auto;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--green);letter-spacing:.14em}
+  .winbar .live i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:7px;animation:blink 1.4s steps(1) infinite}
+  .track{display:flex;gap:6px;padding:18px 20px 8px;flex-wrap:wrap}
+  .tstage{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.08em;color:#43514a;border:1px solid var(--line);padding:5px 13px;border-radius:99px;transition:all .35s}
+  .tstage.on{color:#06130A;background:var(--green);border-color:var(--green)}
+  .tstage.done{color:var(--green);border-color:var(--green-dim)}
+  .feed{padding:10px 20px 22px;font-family:ui-monospace,Menlo,monospace;font-size:13px;min-height:186px}
+  .feed .ln{opacity:0;transform:translateY(6px);transition:opacity .4s,transform .4s;padding:3.5px 0;color:var(--muted)}
+  .feed .ln.show{opacity:1;transform:none}
+  .feed .tg{color:var(--green)} .feed .rd{color:var(--red)}
+  .feed .tm{color:#39463e;margin-right:10px} .feed b{color:var(--ink);font-weight:500}
+
+  /* ---------- quickstart tabs ---------- */
+  .tabs{display:flex;gap:8px;margin-top:40px}
+  .tab{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);border:1px solid var(--line);background:var(--panel);padding:9px 18px;border-radius:8px 8px 0 0;cursor:pointer;border-bottom:none;transition:color .2s}
+  .tab.on{color:var(--green);background:#0C1210}
+  .term{border:1px solid var(--line);border-radius:0 12px 12px 12px;background:#0C1210;padding:22px 26px;font-family:ui-monospace,Menlo,monospace;font-size:13.5px;line-height:2.1;overflow-x:auto}
+  .term .c{color:#43514a} .term .g{color:var(--green)} .term b{color:var(--ink);font-weight:500}
+  .term a{color:var(--green)}
+  .termpane.hidden{display:none}
+
+  /* ---------- PR artifact ---------- */
+  .pr{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-top:44px;overflow:hidden}
+  .prhead{padding:18px 22px;border-bottom:1px solid var(--line)}
+  .prhead .row1{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .prhead .m{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#06130A;background:var(--green);border-radius:99px;padding:3px 13px;font-weight:600}
+  .prhead b{font-size:15.5px}
+  .prhead .meta{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted);margin-top:8px}
+  .diff{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.8;overflow-x:auto;padding:14px 0;background:#0C1210}
+  .diff div{padding:0 22px;white-space:pre}
+  .diff .h{color:#5b8bd6}
+  .diff .a{background:rgba(64,217,103,.07);color:#7ee29b}
+  .diff .d{background:rgba(255,82,87,.07);color:#ff8e91}
+  .checks{border-top:1px solid var(--line);padding:14px 22px;display:grid;gap:8px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted)}
+  .checks .ok{color:var(--green)}
+
+  /* ---------- FAQ ---------- */
+  .faq{margin-top:40px;display:grid;gap:12px;max-width:46em}
+  .faq details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 22px;transition:border-color .25s}
+  .faq details:hover{border-color:var(--green-dim)}
+  .faq summary{cursor:pointer;padding:18px 0;font-weight:600;font-size:15.5px;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:14px}
+  .faq summary::-webkit-details-marker{display:none}
+  .faq summary::after{content:"+";font-family:ui-monospace,Menlo,monospace;color:var(--green);font-size:18px;transition:transform .25s;flex-shrink:0}
+  .faq details[open] summary::after{transform:rotate(45deg)}
+  .faq details p{margin:0 0 18px;color:var(--muted);font-size:14.5px}
+
   /* ---------- contact + footer ---------- */
   .contactrow{display:flex;gap:18px;flex-wrap:wrap;margin-top:34px}
   .contactcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 26px;min-width:240px;transition:border-color .25s}
@@ -226,7 +284,8 @@
     <nav class="navlinks" aria-label="Sections">
       <a href="#why">why</a>
       <a href="#loop">how it works</a>
-      <a href="#compare">compare</a>
+      <a href="#install">install</a>
+      <a href="#faq">faq</a>
       <a href="#contact">contact</a>
     </nav>
     <a class="nav-cta" href="#access">request access →</a>
@@ -241,6 +300,16 @@
     <p class="lede">When production breaks, Cicatrixa reproduces the crash as a <strong>failing test</strong>, patches until your whole suite is <strong>green</strong>, and ships through a canary — before your on-call wakes up.</p>
     <a class="cta" href="#access">Get early access</a>
     <p class="scrollhint">▼ HOW IT REFUSES TO GUESS</p>
+  </div>
+</div>
+
+<div class="stripwrap">
+  <div class="strip">
+    <span class="lbl">ALERTS IN</span>
+    <b>Sentry</b><b>Datadog</b><b>CloudWatch</b>
+    <span class="arrow">→</span>
+    <span class="lbl">PROOF OUT</span>
+    <b>GitHub pull requests</b><b>canary deploys</b><b>regression tests</b>
   </div>
 </div>
 
@@ -280,15 +349,47 @@
     </ol>
   </section>
 
-  <section class="reveal">
-    <p class="eyebrow">Zero infra change</p>
-    <h2>Nothing to install.<br>Runs in our sandboxes, not your prod.</h2>
-    <p class="measure">No downloads, no desktop app, no agents on your servers, no Docker to operate. Two authorizations in the browser and you're live. Reproduction and patching happen in our isolated runners; the output lands in your repo as an ordinary pull request. <strong>Approving the PR is the deploy.</strong></p>
+  <section class="reveal" id="product">
+    <p class="eyebrow">The product, live</p>
+    <h2>Watch an incident heal itself.</h2>
+    <p class="measure">This is the control plane your team sees — a real healing run, stage by stage, from crash to promoted canary.</p>
+    <div class="window" aria-label="Cicatrixa control plane, replaying a healing run">
+      <div class="winbar">
+        <span class="dot" style="background:#3a2a2b"></span><span class="dot" style="background:#3a3527"></span><span class="dot"></span>
+        <span class="t">cicatrixa · control plane — orders-api (production)</span>
+        <span class="live"><i></i>LIVE</span>
+      </div>
+      <div class="track" id="showtrack">
+        <span class="tstage">watchdog</span><span class="tstage">diagnostician</span><span class="tstage">reproducer</span><span class="tstage">fixer</span><span class="tstage">gate</span><span class="tstage">deployer</span><span class="tstage">healed</span>
+      </div>
+      <div class="feed" id="showfeed"></div>
+    </div>
+  </section>
+
+  <section class="reveal" id="install">
+    <p class="eyebrow">Get running</p>
+    <h2>Cloud in two clicks,<br>or run the whole loop yourself.</h2>
+    <p class="measure">The managed cloud needs nothing installed — two browser authorizations and incidents start arriving as proven PRs. Prefer to hold it in your hands first? The full healing loop ships as a self-hosted stack you can run on a laptop.</p>
     <div class="steps">
       <div class="step"><span class="k">STEP 1</span><h3>Point your alerts at us</h3><p>Paste one webhook into Sentry, Datadog, or CloudWatch — the tools you already run. Five minutes, reversible any time.</p></div>
       <div class="step"><span class="k">STEP 2</span><h3>Connect GitHub — two clicks</h3><p>The same authorize button you've clicked for CI. Repo read, pull-request write, nothing else ever touches your infrastructure.</p></div>
       <div class="step"><span class="k">STEP 3</span><h3>Wake up to proof</h3><p>Each incident becomes a PR: failing test + minimal fix + green suite + canary plan.</p></div>
     </div>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-pane="pane-cloud" role="tab">managed cloud · beta</button>
+      <button class="tab" data-pane="pane-self" role="tab">self-hosted</button>
+    </div>
+    <div class="term termpane" id="pane-cloud"><span class="c"># nothing to download — connect in the browser</span>
+<span class="g">1.</span> point your Sentry / Datadog / CloudWatch webhook at cicatrixa
+<span class="g">2.</span> authorize the GitHub App — repo read, PR write
+<span class="g">3.</span> next incident arrives as a PR with its own failing test
+<span class="c"># invites are limited during beta →</span> <a href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">hello@cicatrixa.com</a></div>
+    <div class="term termpane hidden" id="pane-self"><span class="c"># full healing loop on your own machine — Docker required</span>
+<span class="g">$</span> git clone https://github.com/Cicatrixa/Cicatrixa.git <b>&amp;&amp;</b> cd Cicatrixa
+<span class="g">$</span> echo "OPENAI_API_KEY=sk-..." &gt; .env
+<span class="g">$</span> docker compose up -d
+<span class="c"># dashboard → localhost:9000 · break prod → curl -X POST localhost/trigger-bug</span>
+<span class="c"># repo is private during beta — request access →</span> <a href="mailto:hello@cicatrixa.com?subject=Self-hosted%20access">hello@cicatrixa.com</a></div>
   </section>
 
   <section class="reveal" id="compare">
@@ -313,6 +414,62 @@
           <tr><th scope="row">Leaves an artifact behind</th><td><span class="n">✗</span> chat scrollback</td><td><span class="p">±</span> incident report</td><td><span class="y">✓</span> permanent regression test</td></tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <section class="reveal" id="artifact">
+    <p class="eyebrow">What lands in your repo</p>
+    <h2>Every fix arrives as evidence,<br>not a suggestion.</h2>
+    <p class="measure">This is the artifact your team reviews — the same bar you hold humans to: the test that proves the bug, the minimal fix, and the checks that gate the merge.</p>
+    <div class="pr" aria-label="Example pull request produced by Cicatrixa">
+      <div class="prhead">
+        <div class="row1"><span class="m">✓ ready to merge</span><b>fix: guard 100% discount against ZeroDivisionError</b></div>
+        <div class="meta">cicatrixa[bot] wants to merge 2 commits · +14 −1 · repro test: red → green</div>
+      </div>
+      <div class="diff">
+<div class="h">@@ app/main.py @@</div>
+<div class="d">-    multiplier = 100 // (100 - req.discount_pct)</div>
+<div class="a">+    if req.discount_pct &gt;= 100:</div>
+<div class="a">+        total = 0</div>
+<div class="a">+    else:</div>
+<div class="a">+        multiplier = 100 // (100 - req.discount_pct)</div>
+<div class="h">@@ tests/test_discount_100.py — the proof, committed forever @@</div>
+<div class="a">+def test_discount_100_returns_zero_total():</div>
+<div class="a">+    r = client.post("/orders", json={"sku": "A1", "qty": 2, "discount_pct": 100})</div>
+<div class="a">+    assert r.status_code == 200</div>
+      </div>
+      <div class="checks">
+        <span class="ok">✓ reproduction test — failed on main, passes on this branch</span>
+        <span class="ok">✓ full suite — 14/14 green</span>
+        <span class="ok">✓ canary plan attached — 20% → 100%, auto-rollback armed</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="reveal" id="faq">
+    <p class="eyebrow">Questions, answered straight</p>
+    <h2>The things you'd ask before<br>trusting us with production.</h2>
+    <div class="faq">
+      <details>
+        <summary>Does my code leave my repo?</summary>
+        <p>We read your repo through the GitHub App scope you grant — nothing broader. Reproduction runs in isolated, network-disabled sandboxes that are destroyed after each run. Your code is never used to train models.</p>
+      </details>
+      <details>
+        <summary>What happens when it can't reproduce a bug?</summary>
+        <p>The pipeline halts — by design. You get the diagnosis and the attempted test, clearly marked unproven. What you never get is a blind patch. Refusing to guess is the product.</p>
+      </details>
+      <details>
+        <summary>Can it break my production?</summary>
+        <p>It can't touch it. The output is a pull request; nothing ships until your existing CD ships it after merge. Teams that turn the autonomy dial up get canary deploys with automatic rollback — a fix reaches 100% of traffic only after proving itself on a slice.</p>
+      </details>
+      <details>
+        <summary>How is this different from autofix tools?</summary>
+        <p>Autofix tools patch from a stack trace and hope — a stack trace tells you where code died, not what correct behavior is. We require a failing test that proves the bug before any patch is written, then a green suite, then a canary. Proof, not plausibility.</p>
+      </details>
+      <details>
+        <summary>What stacks do you support today?</summary>
+        <p>The beta targets Python services on GitHub, with Sentry, Datadog, and CloudWatch as alert sources. More languages follow the same harness — ask us about yours.</p>
+      </details>
     </div>
   </section>
 </div>
@@ -523,6 +680,55 @@
     }, {threshold:0.12});
     els.forEach(function(el){ io.observe(el); });
   }
+
+  // live product window: replay a healing run on loop
+  var showFeed = document.getElementById("showfeed");
+  if(showFeed){
+    var SCRIPT = [
+      [0,'<span class="tm">03:07:41</span><span class="rd">✗ crash detected</span> · ZeroDivisionError · POST /orders → 500'],
+      [1,'<span class="tm">03:07:52</span>root cause pinned · <b>app/main.py:57</b> · discount_pct=100 → 100 // 0'],
+      [2,'<span class="tm">03:08:19</span>wrote <b>test_discount_100.py</b> · ran in sandbox · <span class="rd">FAILED — bug proven</span>'],
+      [3,'<span class="tm">03:09:31</span>patch attempt 2 · repro <span class="tg">PASSES</span> · full suite <span class="tg">14/14 green</span>'],
+      [4,'<span class="tm">03:09:33</span>gate · verified diff approved'],
+      [5,'<span class="tm">03:10:04</span>canary 20% · error rate 0.00% · promoted <span class="tg">100%</span>'],
+      [6,'<span class="tm">03:10:08</span><span class="tg">✓ healed in 2m 27s</span> · regression test committed to repo']
+    ];
+    var chips = document.querySelectorAll("#showtrack .tstage");
+    if(reduced){
+      chips.forEach(function(c){ c.className = "tstage done"; });
+      SCRIPT.forEach(function(st){
+        var ln = document.createElement("div"); ln.className="ln show"; ln.innerHTML = st[1];
+        showFeed.appendChild(ln);
+      });
+    } else {
+      var si = 0;
+      (function showStep(){
+        if(si === 0){
+          showFeed.innerHTML = "";
+          chips.forEach(function(c){ c.className = "tstage"; });
+        }
+        var st = SCRIPT[si];
+        chips.forEach(function(c,j){ c.className = "tstage" + (j < st[0] ? " done" : j === st[0] ? " on" : ""); });
+        if(si === SCRIPT.length-1) chips[st[0]].className = "tstage done";
+        var ln = document.createElement("div"); ln.className = "ln"; ln.innerHTML = st[1];
+        showFeed.appendChild(ln);
+        requestAnimationFrame(function(){ requestAnimationFrame(function(){ ln.classList.add("show"); }); });
+        si = (si+1) % SCRIPT.length;
+        setTimeout(showStep, si === 0 ? 4600 : (si === 3 ? 2400 : 1700));
+      })();
+    }
+  }
+
+  // quickstart tabs
+  var tabs = document.querySelectorAll(".tab");
+  tabs.forEach(function(tb){
+    tb.addEventListener("click", function(){
+      tabs.forEach(function(x){ x.classList.remove("on"); });
+      document.querySelectorAll(".termpane").forEach(function(x){ x.classList.add("hidden"); });
+      tb.classList.add("on");
+      document.getElementById(tb.dataset.pane).classList.remove("hidden");
+    });
+  });
 
   // decode effect on the one-rule interstitial
   var big = document.querySelector(".interstitial .big");
