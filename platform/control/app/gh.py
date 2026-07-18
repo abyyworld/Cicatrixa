@@ -34,7 +34,7 @@ def build_manifest(base_url: str) -> dict:
         "setup_url": f"{base_url}/connect/github/setup",
         "setup_on_update": False,
         "public": True,
-        "default_permissions": {"contents": "read", "metadata": "read"},
+        "default_permissions": {"contents": "write", "metadata": "read"},
         "default_events": ["push"],
     }
 

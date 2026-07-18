@@ -149,6 +149,40 @@ def fix_plan(dockerfile: str, error_log: str, tree: str, files: dict[str, str],
         return None
 
 
+CHAT_INSTRUCTIONS = """You are the on-call physician for a user's deployed project on the
+Cicatrixa hosting platform. The user talks to you in a chat. You are given the project's
+services (status, ports, container logs, recent deploy logs) and their repositories.
+
+Investigate what the user asks — an error check, a suspected bug, a question, or a change
+they want made. Ground every claim in the logs and code you were shown; never invent errors.
+When a concrete CODE change would fix a real problem — or implement what the user explicitly
+asked for — propose it as exact patches: if the user approves, the platform commits them to
+the user's GitHub repository and redeploys, so patches must be minimal, correct, and
+self-contained.
+
+Reply with ONLY a JSON object:
+{"reply": "<what you found / did, plain language, a few sentences — this is shown in chat>",
+ "service": "<name of the service the patches apply to>" | null,
+ "patches": [{"file": "relative/path", "find": "<exact literal text>", "replace": "<new text>"}] | null,
+ "commit_message": "<one-line commit message>" | null}
+- "find" must be an EXACT substring of the current file; it is literally replaced (all
+  occurrences). Max 8 patches, one service per fix.
+- Patch "file" paths are relative to that service's repository root — do NOT prefix them
+  with the service name.
+- No real problem or no code fix warranted -> patches: null and say so in "reply".
+To read more source files first, reply ONLY: {"need_files": ["<service-name>/relative/path",
+...]} (max 8) — paths are prefixed with the service name."""
+
+
+def chat_agent(context: str, read_file=None) -> dict | None:
+    if not available():
+        return None
+    try:
+        return _ask_with_files(CHAT_INSTRUCTIONS, context, read_file, rounds=3)
+    except Exception:
+        return None
+
+
 INTEGRATION_INSTRUCTIONS = """You are the integration engineer of a hosting platform. A frontend
 service was deployed, but its built JS bundle calls an API at a foreign absolute URL instead of
 its sibling API service on this platform.

@@ -10,7 +10,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import ai, auth, bus, db, engine, gh, metrics, watchdog
+from . import ai, auth, bus, db, engine, gh, medic, metrics, watchdog
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -243,7 +243,34 @@ async def project_page(request: Request, project_id: int):
                   latest_log=(latest["log"] if latest else ""),
                   service_url=engine.service_url,
                   service_mem=metrics.service_mem, service_disk=metrics.service_disk,
+                  chat=medic.history(project_id),
                   error=request.query_params.get("error"))
+
+
+@app.post("/projects/{project_id}/chat")
+async def chat_send(request: Request, project_id: int, message: str = Form(...)):
+    user, project = own_project(request, project_id)
+    if not project:
+        return JSONResponse({"ok": False}, status_code=403)
+    text = message.strip()[:2000]
+    if text:
+        medic.add_message(project_id, "user", text)
+        asyncio.create_task(asyncio.to_thread(medic.investigate_sync, project_id, text))
+    return JSONResponse({"ok": True})
+
+
+@app.post("/projects/{project_id}/chat/{message_id}/apply")
+async def chat_apply(request: Request, project_id: int, message_id: int):
+    user, project = own_project(request, project_id)
+    if not project:
+        return need_login(request)
+    service_id, text = await asyncio.to_thread(medic.apply_fix_sync,
+                                               project_id, message_id)
+    if service_id:
+        asyncio.create_task(engine.deploy(service_id, "chat-fix"))
+    else:
+        medic.add_message(project_id, "agent", f"✖ {text}", kind="status")
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
 @app.post("/projects/{project_id}/deploy")

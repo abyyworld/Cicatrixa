@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS deployments (
     created_at  REAL NOT NULL,
     finished_at REAL
 );
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id),
+    role        TEXT NOT NULL,                 -- user|agent
+    kind        TEXT NOT NULL DEFAULT 'text',  -- text|fix|status
+    content     TEXT NOT NULL DEFAULT '',
+    data        TEXT,                          -- JSON: patches, commit_message, service, applied
+    created_at  REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT

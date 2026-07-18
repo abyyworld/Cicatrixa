@@ -649,6 +649,7 @@ def stop_project(project):
 def delete_project(project):
     for s in db.all_("SELECT * FROM services WHERE project_id=?", (project["id"],)):
         delete_service(s)
+    db.q("DELETE FROM chat_messages WHERE project_id=?", (project["id"],))
     db.q("DELETE FROM projects WHERE id=?", (project["id"],))
 
 

@@ -76,6 +76,47 @@
   </form>
 </details>
 
+<h2>Consultation <span class="lbl-caps" style="margin-left:10px">describe a problem — the AI investigates, fixes, pushes to GitHub, redeploys</span></h2>
+<div class="card" style="padding:0">
+  <div id="chatlog" style="max-height:440px;overflow-y:auto;padding:16px 20px">
+    {% if not chat %}<div class="muted mono" style="font-size:12.5px">No consultations yet.
+      Try: “run an error check on the whole project” or “the login endpoint returns 500 — find and fix it”.</div>{% endif %}
+    {% for m in chat %}
+    <div class="chatmsg" data-kind="{{ m.kind }}">
+      {% if m.kind == 'status' %}
+        <div class="mono muted" style="font-size:12px;margin:6px 0">{{ m.content }}</div>
+      {% else %}
+        <div class="lbl-caps" style="margin-top:12px">{{ 'you' if m.role == 'user' else 'cicatrixa' }}</div>
+        <div style="font-size:13.5px;margin:2px 0 4px;{% if m.role == 'user' %}color:var(--ink2){% endif %}">{{ m.content }}</div>
+        {% if m.kind == 'fix' %}
+        <div style="border:1px solid var(--ink);border-radius:2px;background:var(--paper2);padding:12px 14px;margin:6px 0">
+          <div class="mono" style="font-size:12px"><b>proposed commit:</b> {{ m.data.commit_message }}
+            <span class="muted">→ {{ m.data.service }}</span></div>
+          {% for p in m.data.patches %}
+          <details style="margin-top:6px"><summary class="mono muted" style="font-size:11.5px;cursor:pointer">🩹 {{ p.file }}</summary>
+            <div class="mono" style="font-size:11px;margin-top:4px"><span class="red">− {{ p.find[:300] }}</span><br>
+              <span class="green">+ {{ (p.replace or '')[:300] }}</span></div></details>
+          {% endfor %}
+          {% if m.data.applied %}
+            <div class="mono green" style="font-size:12px;margin-top:8px">✔ applied — pushed {{ (m.data.pushed_sha or '')[:10] }}</div>
+          {% else %}
+            <form method="post" action="/projects/{{ project.id }}/chat/{{ m.id }}/apply" style="margin-top:10px"
+                  onsubmit="return confirm('Commit this fix to {{ m.data.service }}, push to GitHub and redeploy?')">
+              <button class="btn sm">Apply — push to GitHub &amp; redeploy →</button></form>
+          {% endif %}
+        </div>
+        {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div id="thinking" class="mono muted" style="display:none;font-size:12px;margin:8px 0">🧠 Cicatrixa is investigating…</div>
+  </div>
+  <form id="chatform" style="display:flex;gap:10px;border-top:1px solid var(--ink);padding:12px 14px;margin:0">
+    <input type="text" id="chatinput" placeholder="e.g. run an error check on the backend — fix anything you find" autocomplete="off" style="flex:1">
+    <button class="btn sm">Send</button>
+  </form>
+</div>
+
 <h2>Operative record <span class="lbl-caps" style="margin-left:10px">live monitor</span></h2>
 <div class="term" id="log">{{ latest_log }}</div>
 
@@ -110,6 +151,72 @@ es.addEventListener('status', e => {
   const s = JSON.parse(e.data).status;
   const pill = document.getElementById('statuspill');
   pill.textContent = s; pill.className = 'pill ' + s;
+});
+
+// ---- consultation chat ----
+const chatlog = document.getElementById('chatlog');
+const thinking = document.getElementById('thinking');
+chatlog.scrollTop = chatlog.scrollHeight;
+
+function el(tag, style, text){ const n = document.createElement(tag);
+  if (style) n.style.cssText = style; if (text !== undefined) n.textContent = text; return n; }
+
+function renderChat(m){
+  const wrap = el('div');
+  if (m.kind === 'status') {
+    const d = el('div','font-size:12px;margin:6px 0', m.content);
+    d.className = 'mono muted'; wrap.append(d);
+  } else {
+    const who = el('div','margin-top:12px', m.role === 'user' ? 'you' : 'cicatrixa');
+    who.className = 'lbl-caps';
+    const body = el('div','font-size:13.5px;margin:2px 0 4px'+(m.role==='user'?';color:var(--ink2)':''), m.content);
+    wrap.append(who, body);
+    if (m.kind === 'fix') {
+      const card = el('div','border:1px solid var(--ink);border-radius:2px;background:var(--paper2);padding:12px 14px;margin:6px 0');
+      const head = el('div','font-size:12px'); head.className='mono';
+      head.textContent = 'proposed commit: ' + (m.data.commit_message||'') + ' → ' + (m.data.service||'');
+      card.append(head);
+      (m.data.patches||[]).forEach(p => {
+        const det = document.createElement('details'); det.style.marginTop='6px';
+        const sum = document.createElement('summary'); sum.className='mono muted';
+        sum.style.cssText='font-size:11.5px;cursor:pointer'; sum.textContent='🩹 '+p.file;
+        const diff = el('div','font-size:11px;margin-top:4px'); diff.className='mono';
+        const minus = el('span','', '− '+(p.find||'').slice(0,300)); minus.className='red';
+        const plus = el('span','', '+ '+(p.replace||'').slice(0,300)); plus.className='green';
+        diff.append(minus, document.createElement('br'), plus);
+        det.append(sum, diff); card.append(det);
+      });
+      const form = document.createElement('form');
+      form.method='post'; form.action='/projects/{{ project.id }}/chat/'+m.id+'/apply';
+      form.style.marginTop='10px';
+      form.onsubmit = () => confirm('Commit this fix to '+(m.data.service||'')+', push to GitHub and redeploy?');
+      const btn = document.createElement('button'); btn.className='btn sm';
+      btn.textContent='Apply — push to GitHub & redeploy →';
+      form.append(btn); card.append(form);
+      wrap.append(card);
+    }
+  }
+  return wrap;
+}
+
+es.addEventListener('chat', e => {
+  const m = JSON.parse(e.data);
+  if (m.role === 'agent' && m.kind !== 'status') thinking.style.display = 'none';
+  chatlog.insertBefore(renderChat(m), thinking);
+  chatlog.scrollTop = chatlog.scrollHeight;
+});
+
+document.getElementById('chatform').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const input = document.getElementById('chatinput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  thinking.style.display = 'block';
+  chatlog.scrollTop = chatlog.scrollHeight;
+  await fetch('/projects/{{ project.id }}/chat', {method:'POST',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:'message='+encodeURIComponent(text)});
 });
 </script>
 {% endblock %}
