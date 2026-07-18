@@ -48,12 +48,21 @@ services:
       - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control.entrypoints=web"
       - "traefik.http.routers.cx-control.service=cx-control"
-      # catch-all so the bare IP (no Host match) also lands on the platform UI
+      - "traefik.http.routers.cx-control.middlewares=cx-to-https"
+      # catch-all so the bare IP (no Host match) also lands on the platform UI (HTTP only —
+      # a bare IP can't hold a valid cert, so this one is never redirected)
       - "traefik.http.routers.cx-control-fallback.rule=PathPrefix(`/`)"
       - "traefik.http.routers.cx-control-fallback.priority=1"
       - "traefik.http.routers.cx-control-fallback.entrypoints=web"
       - "traefik.http.routers.cx-control-fallback.service=cx-control"
       - "traefik.http.services.cx-control.loadbalancer.server.port=8090"
+      - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=true"
+      # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
+      - "traefik.http.routers.cx-control-secure.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.cx-control-secure.entrypoints=websecure"
+      - "traefik.http.routers.cx-control-secure.service=cx-control"
+      - "traefik.http.routers.cx-control-secure.tls.certresolver=le"
 
 volumes:
   cx-data:

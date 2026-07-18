@@ -112,7 +112,7 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     _send_verification_email(uid, email)
     resp = RedirectResponse("/dashboard", status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session(uid), max_age=auth.SESSION_TTL,
-                    httponly=True, samesite="lax")
+                    httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
     return resp
 
 
@@ -157,7 +157,7 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
         return render(request, "login.html", error="Wrong email or password.")
     resp = RedirectResponse("/dashboard", status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user["id"]),
-                    max_age=auth.SESSION_TTL, httponly=True, samesite="lax")
+                    max_age=auth.SESSION_TTL, httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
     return resp
 
 

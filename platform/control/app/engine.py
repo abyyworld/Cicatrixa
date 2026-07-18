@@ -19,6 +19,7 @@ from . import ai, bus, db, gh, mailer
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
+HTTPS_ENABLED = BASE_URL.startswith("https://")
 NETWORK = os.environ.get("CX_NETWORK", "cxnet")
 WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
 MAX_ATTEMPTS = 3
@@ -47,7 +48,8 @@ def dock() -> docker.DockerClient:
 
 
 def service_url(slug: str) -> str:
-    return f"http://{slug}.{BASE_DOMAIN}"
+    scheme = "https" if HTTPS_ENABLED else "http"
+    return f"{scheme}://{slug}.{BASE_DOMAIN}"
 
 
 def _lock(service_id: int) -> asyncio.Lock:
@@ -325,6 +327,12 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
         f"traefik.http.routers.cx-{slug}.entrypoints": "web",
         f"traefik.http.services.cx-{slug}.loadbalancer.server.port": str(port),
     }
+    if HTTPS_ENABLED:
+        labels[f"traefik.http.routers.cx-{slug}.middlewares"] = "cx-to-https"
+        labels[f"traefik.http.routers.cx-{slug}-secure.rule"] = f"Host(`{slug}.{BASE_DOMAIN}`)"
+        labels[f"traefik.http.routers.cx-{slug}-secure.entrypoints"] = "websecure"
+        labels[f"traefik.http.routers.cx-{slug}-secure.service"] = f"cx-{slug}"
+        labels[f"traefik.http.routers.cx-{slug}-secure.tls.certresolver"] = "le"
     # api bridge: serve this service's API prefixes on the sibling frontends' domains,
     # so frontends call a relative /api/... — same origin, no CORS, no baked URLs
     prefixes = (plan or {}).get("api_prefixes") or []
@@ -333,15 +341,27 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
         if hosts:
             host_rule = " || ".join(f"Host(`{h}.{BASE_DOMAIN}`)" for h in hosts)
             path_rule = " || ".join(f"PathPrefix(`{p}`)" for p in prefixes)
+            rule = f"({host_rule}) && ({path_rule})"
             router = f"cx-{slug}-bridge"
-            labels[f"traefik.http.routers.{router}.rule"] = f"({host_rule}) && ({path_rule})"
+            strip_mw = None
+            if plan.get("strip_prefix"):
+                strip_mw = f"cx-{slug}-strip"
+                labels[f"traefik.http.middlewares.{strip_mw}.stripprefix.prefixes"] = \
+                    ",".join(prefixes)
+            labels[f"traefik.http.routers.{router}.rule"] = rule
             labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
             labels[f"traefik.http.routers.{router}.service"] = f"cx-{slug}"
-            if plan.get("strip_prefix"):
-                mw = f"cx-{slug}-strip"
-                labels[f"traefik.http.middlewares.{mw}.stripprefix.prefixes"] = \
-                    ",".join(prefixes)
-                labels[f"traefik.http.routers.{router}.middlewares"] = mw
+            if strip_mw:
+                labels[f"traefik.http.routers.{router}.middlewares"] = strip_mw
+            if HTTPS_ENABLED:
+                # frontends are served over https, so their /api fetches land on :443 too
+                sec = f"{router}-secure"
+                labels[f"traefik.http.routers.{sec}.rule"] = rule
+                labels[f"traefik.http.routers.{sec}.entrypoints"] = "websecure"
+                labels[f"traefik.http.routers.{sec}.service"] = f"cx-{slug}"
+                labels[f"traefik.http.routers.{sec}.tls.certresolver"] = "le"
+                if strip_mw:
+                    labels[f"traefik.http.routers.{sec}.middlewares"] = strip_mw
     return labels
 
 
