@@ -8,7 +8,7 @@ import re
 import docker.errors
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
+                               Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
 from . import ai, auth, bus, db, engine, gh, mailer, medic, metrics, watchdog
@@ -604,3 +604,19 @@ async def github_webhook(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
+
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="104" fill="#0A0F0C"/>
+<path d="M150 150 L256 256" stroke="#FF5257" stroke-width="36" stroke-linecap="round"/>
+<path d="M256 256 L362 362" stroke="#40D967" stroke-width="36" stroke-linecap="round"/>
+<g stroke="#c9d1d9" stroke-width="17" stroke-linecap="round">
+<path d="M168 216 L216 168"/><path d="M211 259 L259 211"/>
+<path d="M253 301 L301 253"/><path d="M296 344 L344 296"/></g></svg>"""
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(FAVICON_SVG, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
