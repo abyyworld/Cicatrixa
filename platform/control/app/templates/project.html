@@ -19,19 +19,32 @@
 </div>
 
 <!-- Delete modal -->
-<div id="del-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:center;justify-content:center">
-  <div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:28px 32px;max-width:440px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
-    <div style="font-size:17px;font-weight:700;margin-bottom:8px">Delete <em>{{ project.name }}</em>?</div>
-    <p class="muted" style="font-size:13.5px;margin:0 0 18px">This removes all containers, images and deploy history. The repos stay on GitHub unless you also uninstall the Cicatrixa App.</p>
-    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:20px">
-      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Cicatrixa GitHub App</div>
-      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;margin-bottom:8px">
-        <input type="radio" name="del_revoke" value="1" checked> Also uninstall from GitHub &mdash; repo fully disconnected
+<div id="del-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:30px 28px;max-width:420px;width:92%;box-shadow:0 12px 48px rgba(0,0,0,.4);font-family:system-ui,-apple-system,sans-serif">
+    <div style="font-size:18px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px">Delete project?</div>
+    <div style="font-size:13.5px;color:var(--ink2);line-height:1.55;margin-bottom:20px">
+      Removes all containers, images and deploy history.
+      Your GitHub repos are untouched unless you choose to uninstall below.
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:22px">
+      <div style="padding:11px 14px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);background:var(--panel2);border-bottom:1px solid var(--line)">GitHub App</div>
+      <label style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--line)" id="del-opt-yes">
+        <input type="radio" name="del_revoke" value="1" checked style="margin-top:2px;flex-shrink:0">
+        <span style="font-size:13.5px;line-height:1.4;font-family:system-ui,-apple-system,sans-serif">
+          <strong>Uninstall from GitHub</strong><br>
+          <span style="color:var(--ink2);font-size:12.5px">Fully disconnected — re-adding requires a new install</span>
+        </span>
       </label>
-      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer">
-        <input type="radio" name="del_revoke" value="0"> Keep on GitHub &mdash; I can re-add this repo later without going to GitHub
+      <label style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;cursor:pointer" id="del-opt-no">
+        <input type="radio" name="del_revoke" value="0" style="margin-top:2px;flex-shrink:0">
+        <span style="font-size:13.5px;line-height:1.4;font-family:system-ui,-apple-system,sans-serif">
+          <strong>Keep on GitHub</strong><br>
+          <span style="color:var(--ink2);font-size:12.5px">Re-add this project any time — repo already approved</span>
+        </span>
       </label>
     </div>
+
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('del-overlay').style.display='none'" type="button">Cancel</button>
       <button class="btn danger" onclick="submitDelete()" type="button">Delete project</button>

@@ -675,7 +675,7 @@ def delete_service(service, revoke_github: bool = True):
     shutil.rmtree(os.path.join(WORK_ROOT, service["slug"]), ignore_errors=True)
     db.q("DELETE FROM deployments WHERE service_id=?", (service["id"],))
     db.q("DELETE FROM services WHERE id=?", (service["id"],))
-    if revoke_github and service.get("repo_full"):
+    if revoke_github and service["repo_full"]:
         gh.revoke_repo(service["repo_full"])
     refresh_project_status(service["project_id"])
 
