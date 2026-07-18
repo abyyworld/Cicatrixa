@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import os
+import secrets
 import time
 
 from . import db
@@ -10,6 +11,14 @@ from . import db
 SECRET_KEY = os.environ.get("SECRET_KEY") or ""
 SESSION_TTL = 30 * 24 * 3600
 COOKIE_NAME = "cx_session"
+PENDING_COOKIE_NAME = "cx_pending"
+PENDING_TTL = 15 * 60
+CODE_TTL = 10 * 60
+
+
+def generate_code() -> str:
+    """A 6-digit one-time verification code."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def _secret() -> bytes:
@@ -70,6 +79,20 @@ def session_user_id(token: str | None) -> int | None:
         if int(exp) < time.time():
             return None
         return int(uid)
+    except ValueError:
+        return None
+
+
+def make_pending(user_id: int) -> str:
+    return sign_state(f"pending:{user_id}", ttl=PENDING_TTL)
+
+
+def pending_user_id(token: str | None) -> int | None:
+    data = verify_state(token or "")
+    if not data or not data.startswith("pending:"):
+        return None
+    try:
+        return int(data.split(":", 1)[1])
     except ValueError:
         return None
 

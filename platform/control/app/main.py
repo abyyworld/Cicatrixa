@@ -1,5 +1,6 @@
 """Cicatrixa platform control plane — web UI + API + orchestration."""
 import asyncio
+import hmac
 import json
 import os
 import re
@@ -109,40 +110,92 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     is_admin = 1 if (email in ADMIN_EMAILS or not db.one("SELECT 1 FROM users LIMIT 1")) else 0
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,created_at) VALUES(?,?,?,?)",
                (email, auth.hash_password(password), is_admin, db.now())).lastrowid
-    _send_verification_email(uid, email)
+    return _start_verification(uid, email)
+
+
+def _issue_code(user_id: int, email: str) -> bool:
+    """Generate + store + email a fresh code. Returns whether it could be sent."""
+    if not mailer.available():
+        return False
+    code = auth.generate_code()
+    db.q("UPDATE users SET verify_code=?, verify_expires=? WHERE id=?",
+         (code, db.now() + auth.CODE_TTL, user_id))
+    asyncio.create_task(asyncio.to_thread(mailer.send_verification_code, email, code))
+    return True
+
+
+def _start_verification(user_id: int, email: str) -> RedirectResponse:
+    """Send a code and gate on it — or, if mail isn't configured on this instance,
+    verify immediately so local/dev setups without RESEND_API_KEY still work."""
+    if _issue_code(user_id, email):
+        resp = RedirectResponse("/verify-code", status_code=303)
+        resp.set_cookie(auth.PENDING_COOKIE_NAME, auth.make_pending(user_id),
+                        max_age=auth.PENDING_TTL, httponly=True, samesite="lax",
+                        secure=engine.HTTPS_ENABLED)
+        return resp
+    db.q("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
     resp = RedirectResponse("/dashboard", status_code=303)
-    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(uid), max_age=auth.SESSION_TTL,
+    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user_id), max_age=auth.SESSION_TTL,
                     httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
     return resp
 
 
-def _send_verification_email(user_id: int, email: str):
-    if not mailer.available():
-        return
-    token = auth.sign_state(f"verify:{user_id}", ttl=3 * 24 * 3600)
-    asyncio.create_task(asyncio.to_thread(
-        mailer.send_verification, email, f"{BASE_URL}/verify/{token}"))
+def _pending_user(request: Request):
+    uid = auth.pending_user_id(request.cookies.get(auth.PENDING_COOKIE_NAME))
+    return db.one("SELECT * FROM users WHERE id=?", (uid,)) if uid else None
 
 
-@app.get("/verify/{token}")
-async def verify_email(token: str):
-    data = auth.verify_state(token)
-    if not data or not data.startswith("verify:"):
-        return RedirectResponse("/dashboard?error=Invalid+or+expired+verification+link",
-                                status_code=303)
-    uid = int(data.split(":", 1)[1])
-    db.q("UPDATE users SET email_verified=1 WHERE id=?", (uid,))
-    return RedirectResponse("/dashboard?verified=1", status_code=303)
-
-
-@app.post("/verify/resend")
-async def resend_verification(request: Request):
-    user = current_user(request)
+@app.get("/verify-code", response_class=HTMLResponse)
+async def verify_code_page(request: Request):
+    user = _pending_user(request)
     if not user:
-        return need_login(request)
-    if not user["email_verified"]:
-        _send_verification_email(user["id"], user["email"])
-    return RedirectResponse("/dashboard?resent=1", status_code=303)
+        return RedirectResponse("/login", status_code=303)
+    if user["email_verified"]:
+        return RedirectResponse("/dashboard", status_code=303)
+    qp = request.query_params
+    return render(request, "verify_code.html", user=None, pending_email=user["email"],
+                  error=qp.get("error"), resent=qp.get("resent"))
+
+
+@app.post("/verify-code")
+async def verify_code_submit(request: Request, code: str = Form(...)):
+    user = _pending_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    valid = bool(
+        user["verify_code"] and user["verify_expires"]
+        and db.now() < user["verify_expires"]
+        and hmac.compare_digest(code.strip(), user["verify_code"]))
+    if not valid:
+        return render(request, "verify_code.html", user=None, pending_email=user["email"],
+                      error="That code is incorrect or has expired.")
+    db.q("UPDATE users SET email_verified=1, verify_code=NULL, verify_expires=NULL "
+         "WHERE id=?", (user["id"],))
+    resp = RedirectResponse("/dashboard?verified=1", status_code=303)
+    resp.delete_cookie(auth.PENDING_COOKIE_NAME)
+    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user["id"]), max_age=auth.SESSION_TTL,
+                    httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
+    return resp
+
+
+@app.post("/verify-code/resend")
+async def verify_code_resend(request: Request):
+    user = _pending_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    _issue_code(user["id"], user["email"])
+    resp = RedirectResponse("/verify-code?resent=1", status_code=303)
+    resp.set_cookie(auth.PENDING_COOKIE_NAME, auth.make_pending(user["id"]),
+                    max_age=auth.PENDING_TTL, httponly=True, samesite="lax",
+                    secure=engine.HTTPS_ENABLED)
+    return resp
+
+
+@app.post("/verify-code/cancel")
+async def verify_code_cancel():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(auth.PENDING_COOKIE_NAME)
+    return resp
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -155,6 +208,8 @@ async def login(request: Request, email: str = Form(...), password: str = Form(.
     user = db.one("SELECT * FROM users WHERE email=?", (email.strip().lower(),))
     if not user or not auth.verify_password(password, user["pw_hash"]):
         return render(request, "login.html", error="Wrong email or password.")
+    if not user["email_verified"]:
+        return _start_verification(user["id"], user["email"])
     resp = RedirectResponse("/dashboard", status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user["id"]),
                     max_age=auth.SESSION_TTL, httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
@@ -188,8 +243,7 @@ async def dashboard(request: Request):
                   services_by_project=services_by_project,
                   usage=metrics.user_usage(user["id"]),
                   quota=metrics.user_quota(user),
-                  error=qp.get("error"), verified=qp.get("verified"),
-                  resent=qp.get("resent"))
+                  error=qp.get("error"), verified=qp.get("verified"))
 
 
 @app.get("/projects/new", response_class=HTMLResponse)

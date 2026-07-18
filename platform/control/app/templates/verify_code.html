@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Verify your email — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:400px;margin:60px auto">
+  <div class="lbl-caps">check your inbox</div>
+  <h1>Enter your <em>code</em></h1>
+  <p class="sub">We sent a 6-digit code to <b style="color:var(--ink)">{{ pending_email }}</b>.
+    It expires in 10 minutes.</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if resent %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:10px 16px">
+    <span class="mono" style="color:var(--healed);font-size:13px">✔ new code sent.</span></div>{% endif %}
+  <form method="post" action="/verify-code" class="card">
+    <label>verification code</label>
+    <input type="text" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6"
+           autocomplete="one-time-code" autofocus required
+           style="font-size:24px;letter-spacing:.5em;text-align:center;padding:14px 12px">
+    <div style="margin-top:20px"><button class="btn" style="width:100%">Verify →</button></div>
+  </form>
+  <div style="display:flex;justify-content:space-between;margin-top:16px;font-size:13px" class="mono muted">
+    <form method="post" action="/verify-code/resend" style="margin:0">
+      <button type="submit" class="btn ghost sm">Resend code</button></form>
+    <form method="post" action="/verify-code/cancel" style="margin:0">
+      <button type="submit" class="btn ghost sm">Use a different account</button></form>
+  </div>
+</div>
+<script>
+document.querySelector('input[name=code]').addEventListener('input', e => {
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+});
+</script>
+{% endblock %}
