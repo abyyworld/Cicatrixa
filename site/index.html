@@ -36,9 +36,13 @@
     background:color-mix(in srgb, var(--bg) 82%, transparent);
     backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
   }
-  .nav{display:flex;justify-content:space-between;align-items:center;height:60px}
+  .nav{display:flex;justify-content:space-between;align-items:center;height:60px;gap:20px}
   .wordmark{font-family:ui-monospace,Menlo,monospace;font-size:17px;font-weight:600;text-decoration:none;letter-spacing:-.02em}
   .wordmark .r{color:var(--red)} .wordmark .g{color:var(--green)}
+  .navlinks{display:flex;gap:26px;margin-left:auto;margin-right:26px}
+  .navlinks a{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);text-decoration:none;transition:color .2s}
+  .navlinks a:hover,.navlinks a:focus-visible{color:var(--green)}
+  @media (max-width:760px){.navlinks{display:none}}
   .nav-cta{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);text-decoration:none;border:1px solid var(--line);padding:7px 16px;border-radius:6px;transition:color .2s,border-color .2s}
   .nav-cta:hover,.nav-cta:focus-visible{color:var(--green);border-color:var(--green-dim)}
 
@@ -76,8 +80,48 @@
 
   .reveal{opacity:0;transform:translateY(22px);transition:opacity .7s ease,transform .7s ease}
   .reveal.in{opacity:1;transform:none}
+
+  /* staggered child reveals — each section animates in its own style */
+  .reveal .gaplist li{opacity:0;transform:translateX(-22px);transition:opacity .55s ease,transform .55s ease}
+  .reveal.in .gaplist li{opacity:1;transform:none}
+  .reveal.in .gaplist li:nth-child(1){transition-delay:.1s}
+  .reveal.in .gaplist li:nth-child(2){transition-delay:.22s}
+  .reveal.in .gaplist li:nth-child(3){transition-delay:.34s}
+  .reveal.in .gaplist li:nth-child(4){transition-delay:.46s}
+
+  .reveal .stages::before{transform:scaleY(0);transform-origin:top;transition:transform 1.4s ease .25s}
+  .reveal.in .stages::before{transform:scaleY(1)}
+  .reveal .stages li{opacity:0;transform:translateX(-16px);transition:opacity .5s ease,transform .3s ease}
+  .reveal.in .stages li{opacity:1;transform:none}
+  .reveal.in .stages li:nth-child(1){transition-delay:.15s}
+  .reveal.in .stages li:nth-child(2){transition-delay:.32s}
+  .reveal.in .stages li:nth-child(3){transition-delay:.49s}
+  .reveal.in .stages li:nth-child(4){transition-delay:.66s}
+  .reveal.in .stages li:nth-child(5){transition-delay:.83s}
+  .reveal.in .stages li:nth-child(6){transition-delay:1s}
+
+  .reveal .step{opacity:0;transform:translateY(26px) scale(.97);transition:opacity .55s ease,transform .55s ease,border-color .25s}
+  .reveal.in .step{opacity:1;transform:none}
+  .reveal.in .step:nth-child(1){transition-delay:.1s}
+  .reveal.in .step:nth-child(2){transition-delay:.26s}
+  .reveal.in .step:nth-child(3){transition-delay:.42s}
+
+  .reveal tbody tr{opacity:0;transition:opacity .5s ease}
+  .reveal.in tbody tr{opacity:1}
+  .reveal.in tbody tr:nth-child(1){transition-delay:.1s}
+  .reveal.in tbody tr:nth-child(2){transition-delay:.2s}
+  .reveal.in tbody tr:nth-child(3){transition-delay:.3s}
+  .reveal.in tbody tr:nth-child(4){transition-delay:.4s}
+  .reveal.in tbody tr:nth-child(5){transition-delay:.5s}
+  .reveal.in tbody tr:nth-child(6){transition-delay:.6s}
+
+  .final .cta{animation:ctapulse 2.8s ease-in-out infinite}
+  @keyframes ctapulse{0%,100%{box-shadow:0 0 0 0 rgba(64,217,103,.0)}50%{box-shadow:0 10px 34px rgba(64,217,103,.28)}}
+
   @media (prefers-reduced-motion: reduce){
-    .reveal{opacity:1;transform:none;transition:none}
+    .reveal,.reveal .gaplist li,.reveal .stages li,.reveal .step,.reveal tbody tr{opacity:1;transform:none;transition:none}
+    .reveal .stages::before{transform:none;transition:none}
+    .final .cta{animation:none}
     .status .cursor{animation:none}
   }
 
@@ -145,21 +189,46 @@
   .final{text-align:center;padding:130px 0 110px}
   .final h2{margin-left:auto;margin-right:auto}
   .final .measure{margin:0 auto 34px}
-  footer{border-top:1px solid var(--line);padding:30px 0;color:var(--muted);font-size:13px}
-  footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  /* ---------- contact + footer ---------- */
+  .contactrow{display:flex;gap:18px;flex-wrap:wrap;margin-top:34px}
+  .contactcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 26px;min-width:240px;transition:border-color .25s}
+  .contactcard:hover{border-color:var(--green-dim)}
+  .contactcard .k{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+  .contactcard a{display:block;margin-top:8px;font-family:ui-monospace,Menlo,monospace;font-size:15px;color:var(--green);text-decoration:none}
+  .contactcard a:hover{text-decoration:underline}
+  .contactcard p{margin:8px 0 0;color:var(--muted);font-size:13.5px}
 
-  /* ---------- custom cursor ---------- */
+  footer{border-top:1px solid var(--line);padding:48px 0 36px;color:var(--muted);font-size:13.5px}
+  .footgrid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:32px}
+  @media (max-width:720px){.footgrid{grid-template-columns:1fr}}
+  .footgrid h4{margin:0 0 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  .footgrid ul{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+  .footgrid a{color:var(--muted);text-decoration:none;transition:color .2s}
+  .footgrid a:hover{color:var(--green)}
+  .footbrand p{margin:10px 0 0;max-width:26em;color:var(--muted)}
+  .footbase{border-top:1px solid var(--line);margin-top:36px;padding-top:22px;display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-size:12.5px}
+
+  /* ---------- custom cursor: rotating target brackets ---------- */
   html.has-cx, html.has-cx *{cursor:none!important}
   .cx,.cxd{position:fixed;left:-100px;top:-100px;pointer-events:none;z-index:999;transform:translate(-50%,-50%)}
-  .cx{width:30px;height:30px;border:1.5px solid rgba(64,217,103,.55);border-radius:50%;
-      transition:width .18s,height .18s,border-color .18s}
-  .cx.on{width:52px;height:52px;border-color:var(--green);box-shadow:0 0 18px rgba(64,217,103,.25)}
+  .cx{width:28px;height:28px;transition:width .18s,height .18s}
+  .cx i{display:block;width:100%;height:100%;border:1.5px solid rgba(64,217,103,.5);border-radius:8px;
+        animation:cxspin 6s linear infinite;transition:border-color .2s,box-shadow .2s,border-radius .2s}
+  .cx.on{width:48px;height:48px}
+  .cx.on i{border-color:var(--green);border-radius:12px;box-shadow:0 0 18px rgba(64,217,103,.3);animation-duration:1.6s}
   .cxd{width:4px;height:4px;background:var(--green);border-radius:50%}
+  @keyframes cxspin{to{transform:rotate(360deg)}}
 </style>
 
 <header>
   <div class="wrap nav">
     <a class="wordmark" href="#"><span class="r">cica</span><span class="g">trixa</span></a>
+    <nav class="navlinks" aria-label="Sections">
+      <a href="#why">why</a>
+      <a href="#loop">how it works</a>
+      <a href="#compare">compare</a>
+      <a href="#contact">contact</a>
+    </nav>
     <a class="nav-cta" href="#access">request access →</a>
   </div>
 </header>
@@ -176,7 +245,7 @@
 </div>
 
 <div class="wrap">
-  <section class="reveal">
+  <section class="reveal" id="why">
     <p class="eyebrow">The objection, answered</p>
     <h2>You already have a strong model.<br>It's not on call.</h2>
     <p class="measure">Yes — the model in your terminal can debug. But between <strong>"a model that can debug"</strong> and <strong>"a production system that heals itself"</strong> sits everything that isn't intelligence. Nobody says "why do you need CI — you can run the tests by hand." We're CI for incident response.</p>
@@ -197,7 +266,7 @@
 </div>
 
 <div class="wrap">
-  <section class="reveal">
+  <section class="reveal" id="loop">
     <p class="eyebrow">The healing loop</p>
     <h2>Six stages. Each one gated by the last.</h2>
     <p class="measure">The same bar you hold human engineers to — evidence first, ship second.</p>
@@ -222,7 +291,7 @@
     </div>
   </section>
 
-  <section class="reveal">
+  <section class="reveal" id="compare">
     <p class="eyebrow">Where we sit</p>
     <h2>Assistants explain. Autofixers guess.<br>We prove, then ship.</h2>
     <div class="tablewrap">
@@ -253,14 +322,58 @@
     <p class="eyebrow">Early access</p>
     <h2>Stop paging humans for bugs<br>a machine can prove.</h2>
     <p class="measure">We're onboarding a small group of design partners. Bring us one real production bug — we'll heal it free, failing test included.</p>
-    <a class="cta" href="mailto:annolieberto@gmail.com?subject=Cicatrixa%20early%20access">Request early access</a>
+    <a class="cta" href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">Request early access</a>
   </div>
+</div>
+
+<div class="wrap">
+  <section class="reveal" id="contact">
+    <p class="eyebrow">Contact</p>
+    <h2>Talk to a human.</h2>
+    <p class="measure">Questions, pilots, press, or a production bug you want healed — one address reaches the founders directly.</p>
+    <div class="contactrow">
+      <div class="contactcard">
+        <span class="k">General &amp; pilots</span>
+        <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>
+        <p>We reply within one business day.</p>
+      </div>
+      <div class="contactcard">
+        <span class="k">Early access</span>
+        <a href="mailto:hello@cicatrixa.com?subject=Cicatrixa%20early%20access">Request an invite →</a>
+        <p>Design-partner slots are limited.</p>
+      </div>
+    </div>
+  </section>
 </div>
 
 <footer>
   <div class="wrap">
-    <span><span class="mono"><span style="color:var(--red)">cica</span><span style="color:var(--green)">trixa</span></span> · autonomous site reliability</span>
-    <span class="mono">© 2026 Cicatrixa</span>
+    <div class="footgrid">
+      <div class="footbrand">
+        <span class="mono" style="font-size:16px;font-weight:600"><span style="color:var(--red)">cica</span><span style="color:var(--green)">trixa</span></span>
+        <p>Autonomous site reliability. When production breaks, Cicatrixa proves the bug with a failing test, fixes it, and ships through a canary — before your on-call wakes up.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#loop">How it works</a></li>
+          <li><a href="#compare">Where we sit</a></li>
+          <li><a href="#access">Early access</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Company</h4>
+        <ul>
+          <li><a href="#why">Why Cicatrixa</a></li>
+          <li><a href="#contact">Contact</a></li>
+          <li><a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footbase">
+      <span>© 2026 Cicatrixa. All rights reserved.</span>
+      <span class="mono">no reproduction · no patch</span>
+    </div>
   </div>
 </footer>
 
@@ -273,17 +386,17 @@
   var reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   var RED = [255,82,87], GREEN = [64,217,103], DIM = [96,112,103];
-  // sequence: brand name first (split-colored like the wordmark), then FAILED→PASSED forever
-  var WORDS = [
-    {text:"cicatrixa", split:true, status:"the AI SRE that proves the fix before shipping it"},
-    {text:"FAILED", color:RED,   status:"incident detected · ZeroDivisionError · orders-api"},
-    {text:"PASSED", color:GREEN, status:"healed · suite 14/14 green · canary promoted 100%"}
+  var BRAND = "cicatrixa";
+  // the story types itself under the assembled brand name, like a terminal session
+  var LINES = [
+    "ERROR · ZeroDivisionError · orders-api · 03:07:41",
+    "reproducing → wrote test_discount_100 · FAILED — bug proven",
+    "patching → attempt 2 · repro PASSES · suite 14/14 green",
+    "canary 20% → 100% · auto-promoted · healed in 6m 12s",
+    "regression test committed · your on-call never woke up"
   ];
-  var HOLD = [3000, 1900, 2700];
-  var ASSEMBLE = 1500, SCATTER = 1200;
-  var SCATTER_STATUS = ["watchdog","diagnose","reproduce ← proof","fix","verify","canary"];
 
-  var W=0, H=0, DPR=1, particles=[], targets=[[],[],[]], splitX=0;
+  var W=0, H=0, DPR=1, particles=[], targets=[], splitX=0;
   var mouse = {x:-9999, y:-9999};
 
   function resize(){
@@ -291,10 +404,8 @@
     W = canvas.clientWidth; H = canvas.clientHeight;
     canvas.width = W*DPR; canvas.height = H*DPR;
     ctx.setTransform(DPR,0,0,DPR,0,0);
-    targets = WORDS.map(function(w){ return sample(w.text, !!w.split); });
-    var n = 0;
-    targets.forEach(function(t){ n = Math.max(n, t.length); });
-    n = Math.min(3000, n);
+    targets = sample(BRAND, true);
+    var n = Math.min(3000, targets.length);
     while(particles.length < n) particles.push({
       x:Math.random()*W, y:Math.random()*H, vx:0, vy:0,
       c:DIM.slice(), j:Math.random()*6.28
@@ -327,58 +438,48 @@
     return pts;
   }
 
-  // phase machine per word: 0 assemble, 1 hold, 2 scatter
-  var order = [0,1,2], oi = 0, intro = true;
-  var phase = 0, phaseT = 0, last = 0, scatterIdx = 0, scatterTick = 0;
+  // typewriter state for the status line: 0 typing, 1 hold, 2 erasing
+  var li = 0, ci = 0, tmode = 0, tT = 0, last = 0;
+
+  function typeTick(dt){
+    tT += dt;
+    if(tmode===0){
+      if(tT > 26){
+        tT = 0; ci++;
+        statusEl.textContent = LINES[li].slice(0, ci);
+        if(ci >= LINES[li].length) tmode = 1;
+      }
+    } else if(tmode===1){
+      if(tT > 2200){ tT = 0; tmode = 2; }
+    } else {
+      if(tT > 12){
+        tT = 0; ci -= 3;
+        if(ci <= 0){ ci = 0; tmode = 0; li = (li+1)%LINES.length; statusEl.textContent = ""; }
+        else statusEl.textContent = LINES[li].slice(0, ci);
+      }
+    }
+  }
 
   function step(now){
     var dt = Math.min(32, now-last); last = now;
-    phaseT += dt;
-    var limit = phase===0 ? ASSEMBLE : phase===1 ? HOLD[order[oi]] : SCATTER;
-    if(phaseT >= limit){
-      phaseT = 0; phase = (phase+1)%3;
-      if(phase===1) statusEl.textContent = WORDS[order[oi]].status;
-      if(phase===2){ scatterIdx=0; scatterTick=0; }
-      if(phase===0){
-        oi++;
-        if(oi >= order.length){
-          if(intro){ intro = false; order = [1,2]; } // name shown once; loop FAILED→PASSED
-          oi = 0;
-        }
-      }
-    }
-    if(phase===2){
-      scatterTick += dt;
-      if(scatterTick > 210){
-        scatterTick = 0;
-        statusEl.textContent = "▸ " + SCATTER_STATUS[scatterIdx % SCATTER_STATUS.length];
-        scatterIdx++;
-      }
-    }
-
-    var wi = order[oi], word = WORDS[wi], pts = targets[wi];
-    var scattering = (phase===2);
+    typeTick(dt);
 
     ctx.clearRect(0,0,W,H);
     for(var i=0;i<particles.length;i++){
-      var p = particles[i], t = pts[i % pts.length];
-      if(!scattering){
-        p.vx += (t[0]-p.x)*0.055; p.vy += (t[1]-p.y)*0.055;
-        p.vx *= 0.82; p.vy *= 0.82;
-      } else {
-        p.j += 0.02;
-        p.vx += Math.cos(p.j*3+i)*0.12; p.vy += Math.sin(p.j*2.3+i)*0.12;
-        p.vx *= 0.96; p.vy *= 0.96;
-      }
-      // cursor repulsion
+      var p = particles[i], t = targets[i % targets.length];
+      // seek target with a gentle drift so the word breathes
+      p.j += 0.015;
+      p.vx += (t[0]-p.x)*0.055 + Math.cos(p.j*2.1+i)*0.035;
+      p.vy += (t[1]-p.y)*0.055 + Math.sin(p.j*1.7+i)*0.035;
+      p.vx *= 0.82; p.vy *= 0.82;
+      // cursor repulsion — the word dodges your pointer, then heals back
       var dx = p.x-mouse.x, dy = p.y-mouse.y, d2 = dx*dx+dy*dy;
       if(d2 < 8100){
         var d = Math.sqrt(d2)||1, f = (90-d)/90*2.2;
         p.vx += dx/d*f; p.vy += dy/d*f;
       }
       p.x += p.vx; p.y += p.vy;
-      // color ease — the brand word is split red/green at the cica|trixa boundary
-      var col = scattering ? DIM : (word.split ? (t[0] < splitX ? RED : GREEN) : word.color);
+      var col = t[0] < splitX ? RED : GREEN;
       p.c[0]+=(col[0]-p.c[0])*0.06; p.c[1]+=(col[1]-p.c[1])*0.06; p.c[2]+=(col[2]-p.c[2])*0.06;
       ctx.fillStyle = "rgb("+(p.c[0]|0)+","+(p.c[1]|0)+","+(p.c[2]|0)+")";
       ctx.fillRect(p.x, p.y, 2.1, 2.1);
@@ -389,12 +490,11 @@
   function staticRender(){
     // reduced motion: draw the brand name, split-colored, no animation
     ctx.clearRect(0,0,W,H);
-    var pts = targets[0];
-    for(var i=0;i<pts.length;i++){
-      ctx.fillStyle = pts[i][0] < splitX ? "rgb("+RED.join(",")+")" : "rgb("+GREEN.join(",")+")";
-      ctx.fillRect(pts[i][0], pts[i][1], 2.1, 2.1);
+    for(var i=0;i<targets.length;i++){
+      ctx.fillStyle = targets[i][0] < splitX ? "rgb("+RED.join(",")+")" : "rgb("+GREEN.join(",")+")";
+      ctx.fillRect(targets[i][0], targets[i][1], 2.1, 2.1);
     }
-    statusEl.textContent = WORDS[0].status;
+    statusEl.textContent = LINES[LINES.length-1];
   }
 
   canvas.addEventListener("pointermove", function(e){
@@ -411,7 +511,7 @@
 
   resize();
   if(reduced){ staticRender(); }
-  else { statusEl.textContent = WORDS[0].status; requestAnimationFrame(function(t){ last=t; requestAnimationFrame(step); }); }
+  else { requestAnimationFrame(function(t){ last=t; requestAnimationFrame(step); }); }
 
   // scroll reveals
   var els = document.querySelectorAll(".reveal");
@@ -424,9 +524,38 @@
     els.forEach(function(el){ io.observe(el); });
   }
 
+  // decode effect on the one-rule interstitial
+  var big = document.querySelector(".interstitial .big");
+  if(big && !reduced && "IntersectionObserver" in window){
+    var finalHTML = big.innerHTML;
+    var finalText = big.textContent;
+    var GLYPHS = "!<>-_\\/[]{}=+*^?#";
+    var io2 = new IntersectionObserver(function(entries){
+      entries.forEach(function(en){
+        if(!en.isIntersecting) return;
+        io2.unobserve(big);
+        var frame = 0, total = 26;
+        (function scr(){
+          frame++;
+          var reveal = Math.floor(finalText.length * (frame/total));
+          var out = "";
+          for(var i=0;i<finalText.length;i++){
+            var ch = finalText[i];
+            if(i < reveal || ch === " ") out += ch;
+            else out += GLYPHS[(Math.random()*GLYPHS.length)|0];
+          }
+          big.textContent = out;
+          if(frame < total) requestAnimationFrame(scr);
+          else big.innerHTML = finalHTML;
+        })();
+      });
+    }, {threshold:0.5});
+    io2.observe(big);
+  }
+
   // custom cursor — desktop fine pointers only
   if(matchMedia("(pointer: fine)").matches && !reduced){
-    var ring = document.createElement("div"); ring.className = "cx";
+    var ring = document.createElement("div"); ring.className = "cx"; ring.innerHTML = "<i></i>";
     var dot = document.createElement("div"); dot.className = "cxd";
     document.body.appendChild(ring); document.body.appendChild(dot);
     document.documentElement.classList.add("has-cx");
@@ -434,7 +563,7 @@
     addEventListener("pointermove", function(e){
       ctx2 = e.clientX; cty = e.clientY;
       dot.style.left = ctx2+"px"; dot.style.top = cty+"px";
-      var el = e.target && e.target.closest ? e.target.closest("a,button,.step,.stages li") : null;
+      var el = e.target && e.target.closest ? e.target.closest("a,button,.step,.stages li,.contactcard") : null;
       ring.classList.toggle("on", !!el);
     }, {passive:true});
     (function follow(){
