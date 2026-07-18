@@ -149,6 +149,51 @@ def fix_plan(dockerfile: str, error_log: str, tree: str, files: dict[str, str],
         return None
 
 
+INTEGRATION_INSTRUCTIONS = """You are the integration engineer of a hosting platform. A frontend
+service was deployed, but its built JS bundle calls an API at a foreign absolute URL instead of
+its sibling API service on this platform.
+
+The platform bridges the sibling API onto this frontend's own domain: requests to the listed
+bridge prefix (e.g. /api/...) are routed to the API container (the prefix is stripped if noted).
+So the correct fix is almost always: make the frontend call RELATIVE paths under the bridge
+prefix — same origin, no CORS, no baked hostnames.
+
+You may patch the frontend's files before rebuild. IMPORTANT: if the Dockerfile ships
+prebuilt assets (a committed dist/ or build/ directory), patching src/ changes nothing —
+patch the built asset files directly (replacing a quoted URL string inside minified JS is
+safe), or patch both. "Files containing each URL" below tells you exactly where the foreign
+URLs live. Reply with ONLY a JSON object:
+{"diagnosis": "<1-2 sentences>",
+ "patches": [{"file": "src/x.js", "find": "<exact literal text>", "replace": "<new text>"}],
+ "build_args": {"NAME": "value"} or null}
+- "find" must be an EXACT substring of the file (it will be literally replaced, all occurrences).
+- Patch the API base constant / axios baseURL / fetch prefix to the bridge prefix (e.g. "/api"),
+  or to an env-var read with that default. Max 6 patches, keep them minimal.
+- If the foreign URL is legitimately external (a CDN, an auth provider, a third-party API),
+  reply {"ok": true, "diagnosis": "<why no change is needed>"}.
+If you need to see source files first, reply ONLY: {"need_files": ["path", ...]} (max 8)."""
+
+
+def integration_fix(suspicious: list[str], bridge_prefix: str, strip: bool,
+                    siblings: list[dict], tree: str, files: dict[str, str],
+                    read_file=None, url_locations: dict | None = None) -> dict | None:
+    if not available():
+        return None
+    blob = "\n".join(f"--- {p} ---\n{c[:3000]}" for p, c in files.items())
+    strip_note = ("the prefix is STRIPPED before reaching the API (bridge /api/x -> API /x)"
+                  if strip else "the prefix is passed through unchanged")
+    locations = "\n".join(f"  {u} -> {paths}" for u, paths in (url_locations or {}).items())
+    prompt = (_sibling_context(siblings) +
+              f"Bridge prefix on this frontend's domain: {bridge_prefix} ({strip_note})\n"
+              f"Foreign API URLs found in the built bundle: {suspicious}\n"
+              f"Files containing each URL (repo-relative):\n{locations or '  (none found)'}\n\n"
+              f"File tree:\n{tree[:6000]}\n\nKey files:\n{blob[:25000]}")
+    try:
+        return _ask_with_files(INTEGRATION_INSTRUCTIONS, prompt, read_file)
+    except Exception:
+        return None
+
+
 def probe_paths(tree: str, files: dict[str, str], run_log: str, status: int) -> list[str]:
     """The app answered >=400 at its health path — read the code and name real routes."""
     if not available():

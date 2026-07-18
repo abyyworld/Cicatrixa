@@ -202,6 +202,8 @@ def _run_pipeline(service, project, dep: int, log):
         port, container, run_log = _start_and_probe(service, image, plan, log)
         if port:
             _finish(service, container, image, port, plan, sha, log, tree, files)
+            _integration_audit(service, workdir, plan, port, container, sha,
+                               siblings, read_file, tree, files, log, buildargs)
             return
         last_error = f"container did not serve HTTP.\nBUILD LOG:\n{build_log[-3000:]}" \
                      f"\nRUNTIME LOG:\n{run_log[-6000:]}"
@@ -499,6 +501,123 @@ def _prune_images(slug: str, keep: str):
         pass
 
 
+# ---------- integration audit: does the frontend actually talk to its sibling API? ----------
+
+URL_WHITELIST = ("w3.org", "youtube", "youtu.be", "vimeo", "plyr", "googleapis",
+                 "gstatic", "unpkg", "jsdelivr", "cdn.", "reactrouter", "react.dev",
+                 "noembed", "schema.org", "github.com", "npmjs", "mozilla.org",
+                 "fb.me", "ytimg.com", "aniview")
+
+
+def _bundle_urls(container_name: str, port: int, log) -> list[str]:
+    """Fetch the frontend's built JS from the container and list foreign API URLs."""
+    try:
+        index = httpx.get(f"http://{container_name}:{port}/", timeout=8).text
+    except Exception:
+        return []
+    scripts = re.findall(r'src="(/[^"]+\.m?js[^"]*)"', index)[:3]
+    found: set[str] = set()
+    for src in scripts:
+        try:
+            js = httpx.get(f"http://{container_name}:{port}{src}", timeout=10).text
+        except Exception:
+            continue
+        for url in re.findall(r'https?://[A-Za-z0-9.\-]+(?::\d+)?', js):
+            host = url.split("//", 1)[1]
+            if BASE_DOMAIN in host or any(w in host for w in URL_WHITELIST):
+                continue
+            if host == "localhost" or host == "127.0.0.1":
+                continue  # bare localhost strings are dev-mode noise; ports are real
+            found.add(url)
+    return sorted(found)[:5]
+
+
+def _grep_urls(workdir: str, urls: list[str]) -> dict[str, list[str]]:
+    """Locate which repo files (source AND committed build output) contain each URL."""
+    hits: dict[str, list[str]] = {u: [] for u in urls}
+    root = os.path.realpath(workdir)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            try:
+                if os.path.getsize(full) > 3_000_000:
+                    continue
+                content = open(full, errors="replace").read()
+            except OSError:
+                continue
+            rel = os.path.relpath(full, root)
+            for u in urls:
+                if u in content and len(hits[u]) < 10:
+                    hits[u].append(rel)
+    return {u: paths for u, paths in hits.items() if paths}
+
+
+def _integration_audit(service, workdir, plan, port, container_name, sha,
+                       siblings, read_file, tree, files, log, buildargs):
+    """Frontend + api sibling: verify the built bundle targets the sibling, not a
+    foreign host; if not, let the AI patch the source and rebuild once."""
+    apiish = [s for s in siblings if _is_api_name(s["name"])]
+    if not apiish or _is_api_name(service["name"]) or not ai.available():
+        return
+    suspicious = _bundle_urls(container_name, port, log)
+    if not suspicious:
+        return
+    log(f"🔬 integration audit: bundle calls foreign API host(s): {', '.join(suspicious)}")
+    log("  🔎 AI is reading the frontend source to rewire it to the sibling API")
+    api_row = db.one("SELECT api_prefix FROM services WHERE slug=?", (apiish[0]["slug"],))
+    prefix = (api_row["api_prefix"] if api_row and api_row["api_prefix"] else "/api")
+    url_locations = _grep_urls(workdir, suspicious)
+    for u, paths in url_locations.items():
+        log(f"  found {u} in: {', '.join(paths[:4])}")
+    fix = ai.integration_fix(suspicious, prefix.split(",")[0], True, siblings,
+                             tree, files, read_file, url_locations=url_locations)
+    if not fix or fix.get("ok") or not fix.get("patches"):
+        log(f"  audit verdict: {(fix or {}).get('diagnosis') or 'no safe patch produced'}"
+            " — leaving the build as is")
+        return
+    log(f"  diagnosis: {fix.get('diagnosis', '')}")
+    applied = 0
+    for patch in fix["patches"][:6]:
+        rel, find, repl = patch.get("file", ""), patch.get("find"), patch.get("replace")
+        full = os.path.realpath(os.path.join(workdir, rel.lstrip("/")))
+        if not full.startswith(os.path.realpath(workdir) + os.sep) or not find:
+            continue
+        try:
+            src = open(full, errors="replace").read()
+        except OSError:
+            log(f"  ⚠ patch target not found: {rel}")
+            continue
+        if find not in src:
+            log(f"  ⚠ pattern not found in {rel}")
+            continue
+        with open(full, "w") as f:
+            f.write(src.replace(find, repl or ""))
+        log(f"  🩹 patched {rel}")
+        applied += 1
+    if not applied:
+        return
+    merged_args = {**buildargs, **(fix.get("build_args") or {})}
+    image2 = f"cx-{service['slug']}:{sha[:10]}-i"
+    log("🔨 rebuilding with integration patches")
+    try:
+        _build(workdir, ".cx.Dockerfile" if plan.get("dockerfile") else "Dockerfile",
+               image2, log, merged_args)
+    except RuntimeError as exc:
+        log(f"  ✖ integration rebuild failed, keeping original build: {str(exc)[-300:]}")
+        return
+    port2, container2, _run_log = _start_and_probe(service, image2, plan, log)
+    if not port2:
+        log("  ✖ patched build did not serve — keeping original build")
+        return
+    _finish(service, container2, image2, port2, plan, sha, log, tree, files)
+    remaining = _bundle_urls(container2, port2, log)
+    if remaining:
+        log(f"  audit after patch: still sees {', '.join(remaining)}")
+    else:
+        log("  ✓ integration audit clean — frontend now targets its sibling API")
+
+
 # ---------- lifecycle ----------
 
 def stop_service(service):
@@ -549,7 +668,7 @@ def _snapshot(root: str) -> tuple[str, dict[str, str]]:
         depth = 0 if rel == "." else rel.count(os.sep) + 1
         dirnames[:] = [d for d in dirnames
                        if d not in (".git", "node_modules", "__pycache__", ".next",
-                                    "dist", "build", "venv", ".venv", "target")][:20]
+                                    "venv", ".venv", "target")][:20]
         if depth > 2:
             dirnames[:] = []
             continue
