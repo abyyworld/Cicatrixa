@@ -15,8 +15,8 @@
 {% endif %}
 <div style="display:flex;align-items:center;gap:16px">
   <div>
-    <div class="lbl-caps">the ward — all patients</div>
-    <h1>Projects</h1>
+    <div class="lbl-caps">your projects</div>
+    <h1>Dashboard</h1>
     <p class="sub" style="margin-bottom:0">
       {% if connection %}
         GitHub connected
@@ -48,7 +48,7 @@
 <div class="grid" style="margin-top:16px">
 {% if not projects %}
   <div class="card" style="text-align:center;padding:48px">
-    <div class="serif" style="font-size:28px;font-style:italic">The ward is empty.</div>
+    <div class="serif" style="font-size:26px">Nothing deployed yet.</div>
     <p class="muted">No projects yet.
     {% if connection %}Pick a repo and the AI takes it from there.{% else %}Connect your GitHub account to get started.{% endif %}</p>
     <a class="btn" href="{% if connection %}/projects/new{% else %}/connect/github{% endif %}">

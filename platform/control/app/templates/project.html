@@ -4,7 +4,7 @@
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
   <div>
-    <div class="lbl-caps">patient chart</div>
+    <div class="lbl-caps">project</div>
     <h1 style="display:flex;align-items:center;gap:12px">{{ project.name }}
       <span class="pill {{ project.status }}" id="statuspill">{{ project.status }}</span></h1>
     <div class="mono muted" style="font-size:13px">
@@ -76,7 +76,7 @@
   </form>
 </details>
 
-<h2>Consultation <span class="lbl-caps" style="margin-left:10px">describe a problem — the AI investigates, fixes, pushes to GitHub, redeploys</span></h2>
+<h2>Consult <span class="lbl-caps" style="margin-left:10px">describe a problem — the AI investigates, fixes, pushes to GitHub, redeploys</span></h2>
 <div class="card" style="padding:0">
   <div id="chatlog" style="max-height:440px;overflow-y:auto;padding:16px 20px">
     {% if not chat %}<div class="muted mono" style="font-size:12.5px">No consultations yet.
@@ -117,7 +117,7 @@
   </form>
 </div>
 
-<h2>Operative record <span class="lbl-caps" style="margin-left:10px">live monitor</span></h2>
+<h2>Deploy log <span class="lbl-caps" style="margin-left:10px">live</span></h2>
 <div class="term" id="log">{{ latest_log }}</div>
 
 <h2>Deployments</h2>

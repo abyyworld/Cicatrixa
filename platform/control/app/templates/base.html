@@ -4,140 +4,111 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Cicatrixa{% endblock %}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ————— Cicatrixa design system: “the clinical chart” —————
-     cicatrix (n.) — the scar of a healed wound.
-     Warm paper, ink, arterial red; sutures for seams; vitals for status. */
+  /* Cicatrixa app shell — same dark system as the landing page:
+     near-black surface, arterial red / healed green accents, mono UI type. */
   :root{
-    --paper:#F4EFE6; --paper2:#ECE4D4; --card:#FAF6EE;
-    --ink:#1C1917; --ink2:#6B6257; --rule:#D3C8B4; --rule2:#B8AB92;
-    --scar:#B0261C; --healed:#1E7A4C; --amber:#A8730A;
-    --monitor:#161310; --monitor-ink:#C9BFA9;
-    /* aliases kept for shared components */
-    --bg:var(--paper); --panel:var(--card); --panel2:var(--paper2);
-    --line:var(--rule); --muted:var(--ink2);
-    --red:var(--scar); --green:var(--healed); --green-dim:#CFE0D2;
-    --serif:"Instrument Serif",Georgia,serif;
-    --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+    --bg:#0A0F0C; --panel:#101713; --panel2:#0C1210;
+    --ink:#E4EEE7; --muted:#74857B; --line:#1F2B24;
+    --scar:#FF5257; --healed:#40D967; --healed-dim:#2C7A45; --amber:#E8B44C;
+    --serif:Georgia,'Times New Roman',serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    /* aliases some older templates reference */
+    --red:var(--scar); --green:var(--healed); --green-dim:var(--healed-dim);
+    --panel-deep:var(--panel2);
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--paper);color:var(--ink);
-    font:15.5px/1.65 var(--mono);-webkit-font-smoothing:antialiased}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 var(--mono);-webkit-font-smoothing:antialiased}
   .serif{font-family:var(--serif)}
   .mono{font-family:var(--mono)}
   a{color:inherit}
-  ::selection{background:var(--scar);color:var(--paper)}
+  ::selection{background:var(--healed-dim);color:#fff}
   .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
 
-  /* chart chrome: metadata strip + masthead */
-  .chartline{border-bottom:1px solid var(--ink);font:11px/1 var(--mono);
-    letter-spacing:.14em;text-transform:uppercase;color:var(--ink2)}
-  .chartline .wrap{display:flex;gap:26px;padding:7px 24px;flex-wrap:wrap}
-  .chartline b{color:var(--ink);font-weight:500}
-  header.masthead{border-bottom:1px solid var(--ink);background:var(--paper);
-    position:sticky;top:0;z-index:20}
-  .nav{display:flex;align-items:center;height:62px;gap:26px}
-  .wordmark{font-family:var(--serif);font-size:26px;letter-spacing:-.01em;
-    text-decoration:none;position:relative;padding-bottom:7px}
-  .wordmark::after{content:"";position:absolute;left:2px;bottom:0;width:64px;height:8px;
-    background-image:url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="16" height="8"%3E%3Cline x1="0" y1="4" x2="16" y2="4" stroke="%23B8AB92" stroke-width="1"/%3E%3Cline x1="5" y1="0" x2="11" y2="8" stroke="%23B0261C" stroke-width="1.4"/%3E%3C/svg%3E');
-    background-repeat:repeat-x}
-  .nav a.lnk{font:12px var(--mono);letter-spacing:.12em;text-transform:uppercase;
-    color:var(--ink2);text-decoration:none;border-bottom:1px solid transparent;padding-bottom:2px}
-  .nav a.lnk:hover{color:var(--scar);border-bottom-color:var(--scar)}
+  header.masthead{position:sticky;top:0;z-index:20;border-bottom:1px solid var(--line);
+    background:color-mix(in srgb, var(--bg) 82%, transparent);backdrop-filter:blur(10px)}
+  .nav{display:flex;align-items:center;height:60px;gap:22px}
+  .wordmark{font:600 17px var(--mono);letter-spacing:-.02em;text-decoration:none}
+  .wordmark .r{color:var(--scar)} .wordmark .g{color:var(--healed)}
+  .nav a.lnk{font:12px var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);text-decoration:none;transition:color .2s}
+  .nav a.lnk:hover{color:var(--healed)}
   .nav .spacer{margin-left:auto}
 
-  /* suture: the seam between sections */
-  .suture{height:12px;margin:34px 0;border:0;
-    background-image:url('data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="26" height="12"%3E%3Cline x1="0" y1="6" x2="26" y2="6" stroke="%23B8AB92" stroke-width="1"/%3E%3Cline x1="9" y1="1" x2="17" y2="11" stroke="%23B0261C" stroke-width="1.6"/%3E%3C/svg%3E');
-    background-repeat:repeat-x;background-position:center}
-
-  main{padding:40px 0 90px}
-  h1{font-family:var(--serif);font-weight:400;font-size:40px;line-height:1.08;
+  main{padding:44px 0 90px}
+  h1{font-family:var(--serif);font-weight:400;font-size:32px;line-height:1.12;
     letter-spacing:-.01em;margin:0 0 8px}
-  h1 em,.accent-i{font-style:italic;color:var(--scar)}
-  h2{font-family:var(--serif);font-weight:400;font-size:24px;margin:40px 0 14px}
-  p.sub{color:var(--ink2);margin:0 0 26px;font-size:14px}
-  .lbl-caps{font:11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--ink2)}
+  h1 em,.accent-i{font-style:normal;color:var(--healed)}
+  h2{font-family:var(--serif);font-weight:400;font-size:22px;margin:40px 0 14px}
+  p.sub{color:var(--muted);margin:0 0 26px;font-size:14px}
+  .lbl-caps{font:11px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
 
-  .card{background:var(--card);border:1px solid var(--ink);border-radius:2px;padding:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px}
   .grid{display:grid;gap:14px}
 
-  .btn{display:inline-block;font:12.5px var(--mono);font-weight:600;letter-spacing:.1em;
-    text-transform:uppercase;color:var(--paper);background:var(--scar);
-    border:1px solid var(--ink);border-radius:2px;padding:10px 20px;text-decoration:none;
-    cursor:pointer;box-shadow:3px 3px 0 var(--ink);transition:transform .08s,box-shadow .08s}
-  .btn:hover{transform:translate(1px,1px);box-shadow:2px 2px 0 var(--ink)}
-  .btn:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--ink)}
-  .btn.ghost{background:var(--card);color:var(--ink)}
-  .btn.danger{background:var(--card);color:var(--scar)}
-  .btn.sm{padding:6px 12px;font-size:11px;box-shadow:2px 2px 0 var(--ink)}
-  .btn.sm:hover{box-shadow:1px 1px 0 var(--ink)}
+  .btn{display:inline-block;font:12.5px var(--mono);font-weight:600;letter-spacing:.06em;
+    color:#06130A;background:var(--healed);border:1px solid var(--healed);
+    border-radius:8px;padding:10px 20px;text-decoration:none;cursor:pointer;
+    transition:transform .15s,box-shadow .15s}
+  .btn:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(64,217,103,.22)}
+  .btn.ghost{background:transparent;color:var(--muted);border-color:var(--line)}
+  .btn.ghost:hover{color:var(--healed);border-color:var(--healed-dim);box-shadow:none;transform:none}
+  .btn.danger{background:transparent;color:var(--scar);border-color:var(--line)}
+  .btn.danger:hover{border-color:var(--scar);box-shadow:0 8px 20px rgba(255,82,87,.15);transform:none}
+  .btn.sm{padding:6px 13px;font-size:11px;border-radius:6px}
 
   input[type=text],input[type=email],input[type=password],select{
-    width:100%;background:var(--card);border:1px solid var(--ink);border-radius:2px;
-    color:var(--ink);padding:10px 12px;font:14px var(--mono);outline:none}
-  input:focus,select:focus{box-shadow:2px 2px 0 var(--rule2)}
-  label{display:block;font:11px var(--mono);letter-spacing:.14em;color:var(--ink2);
+    width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    color:var(--ink);padding:10px 12px;font:14px var(--mono);outline:none;
+    transition:border-color .2s}
+  input:focus,select:focus{border-color:var(--healed-dim)}
+  label{display:block;font:11px var(--mono);letter-spacing:.12em;color:var(--muted);
     margin:16px 0 6px;text-transform:uppercase}
-  .err{color:var(--scar);font:13px var(--mono);border:1px solid var(--scar);
-    background:#F3E2DE;border-radius:2px;padding:10px 14px;margin:14px 0}
+  .err{color:var(--scar);font:13px var(--mono);border:1px solid rgba(255,82,87,.35);
+    background:rgba(255,82,87,.08);border-radius:8px;padding:10px 14px;margin:14px 0}
 
-  /* status: stamped vitals — symbol + word, never color alone */
-  .pill{display:inline-block;font:10.5px var(--mono);font-weight:600;padding:3px 9px;
-    border-radius:2px;border:1px solid var(--ink2);color:var(--ink2);
-    text-transform:uppercase;letter-spacing:.12em;transform:rotate(-1deg)}
-  .pill.live{color:var(--healed);border-color:var(--healed)}
-  .pill.live::before{content:"● "}
+  .pill{display:inline-flex;align-items:center;gap:5px;font:10.5px var(--mono);font-weight:600;
+    padding:3px 11px;border-radius:99px;border:1px solid var(--muted);color:var(--muted);
+    text-transform:uppercase;letter-spacing:.1em}
+  .pill::before{content:"●";font-size:8px;line-height:1}
+  .pill.live{color:var(--healed);border-color:var(--healed-dim)}
   .pill.deploying,.pill.degraded{color:var(--amber);border-color:var(--amber)}
-  .pill.deploying::before{content:"◐ "} .pill.degraded::before{content:"◭ "}
   .pill.failed{color:var(--scar);border-color:var(--scar)}
-  .pill.failed::before{content:"✕ "}
-  .pill.stopped::before,.pill.new::before{content:"○ "}
+  .pill.stopped,.pill.new{color:var(--muted);border-color:var(--line)}
 
-  /* the monitor: logs render on an instrument screen set into the paper */
-  .term{background:var(--monitor);border:1px solid var(--ink);border-radius:2px;
-    box-shadow:inset 0 0 0 3px #241F19,3px 3px 0 var(--ink);
-    padding:16px 18px;font:12.5px/1.75 var(--mono);color:var(--monitor-ink);
+  .term{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;font:12.5px/1.75 var(--mono);color:#9fb3a7;
     white-space:pre-wrap;word-break:break-word;max-height:460px;overflow-y:auto}
 
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th{font:10.5px var(--mono);font-weight:600;text-transform:uppercase;letter-spacing:.14em;
-    color:var(--ink2);text-align:left;padding:8px 10px;border-bottom:1px solid var(--ink)}
-  td{padding:10px;border-bottom:1px solid var(--rule)}
-  .muted{color:var(--ink2)} .green{color:var(--healed)} .red{color:var(--scar)}
-  code{font:.9em var(--mono);background:var(--paper2);border:1px solid var(--rule);
-    border-radius:2px;padding:1px 6px}
+  th{font:10.5px var(--mono);font-weight:600;text-transform:uppercase;letter-spacing:.12em;
+    color:var(--muted);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:10px;border-bottom:1px solid var(--line)}
+  .muted{color:var(--muted)} .green{color:var(--healed)} .red{color:var(--scar)}
+  code{font:.9em var(--mono);background:var(--panel2);border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px}
 
-  /* vitals meters */
   .meter{min-width:170px;flex:1}
   .meter .lbl{display:flex;justify-content:space-between;gap:14px;font:10.5px var(--mono);
-    color:var(--ink2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;
+    color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;
     white-space:nowrap}
-  .meter .track{height:7px;background:var(--paper2);border:1px solid var(--ink);
-    border-radius:1px;overflow:hidden}
-  .meter .fill{height:100%;background:var(--healed)}
+  .meter .track{height:6px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:99px;overflow:hidden}
+  .meter .fill{height:100%;background:var(--healed);border-radius:99px}
   .meter .fill.warn{background:var(--amber)} .meter .fill.crit{background:var(--scar)}
 </style>
 {% block head %}{% endblock %}
 </head>
 <body>
-<div class="chartline"><div class="wrap">
-  <span>chart № cx-{{ user.id if user else '000' }}</span>
-  <span>facility: <b>cicatrixa</b> · self-healing hosting</span>
-  <span style="margin-left:auto">status: <b style="color:var(--healed)">under continuous observation</b></span>
-</div></div>
 <header class="masthead"><div class="wrap nav">
-  <a class="wordmark" href="/">Cicatrixa</a>
+  <a class="wordmark" href="/"><span class="r">cica</span><span class="g">trixa</span></a>
   {% if user %}
     <a class="lnk" href="/dashboard">Dashboard</a>
     <a class="lnk" href="/projects/new">New project</a>
     {% if user.is_admin %}<a class="lnk" href="/admin">Admin</a>{% endif %}
     <span class="spacer"></span>
-    <span class="lnk" style="cursor:default;border:none">{{ user.email }}</span>
+    <span class="lnk" style="cursor:default">{{ user.email }}</span>
     <form method="post" action="/logout" style="margin:0"><button class="btn ghost sm">Log out</button></form>
   {% else %}
     <span class="spacer"></span>
