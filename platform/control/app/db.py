@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     quota_services  INTEGER,          -- NULL -> platform default
     quota_ram_mb    INTEGER,
     quota_disk_mb   INTEGER,
+    email_verified  INTEGER NOT NULL DEFAULT 0,
     created_at      REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS github_connections (
@@ -96,6 +97,7 @@ def init():
     for table, col, ctype in (("users", "quota_services", "INTEGER"),
                               ("users", "quota_ram_mb", "INTEGER"),
                               ("users", "quota_disk_mb", "INTEGER"),
+                              ("users", "email_verified", "INTEGER NOT NULL DEFAULT 0"),
                               ("services", "api_prefix", "TEXT")):
         try:
             conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")

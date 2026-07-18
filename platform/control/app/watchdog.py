@@ -90,6 +90,9 @@ def _check_health_sync():
             # container vanished entirely -> mark failed (poll/manual can redeploy)
             db.q("UPDATE services SET status='failed' WHERE id=?", (s["id"],))
             engine.refresh_project_status(s["project_id"])
+            project = db.one("SELECT * FROM projects WHERE id=?", (s["project_id"],))
+            if project:
+                engine._notify_failure(project, s)
 
 
 _main_loop: asyncio.AbstractEventLoop | None = None

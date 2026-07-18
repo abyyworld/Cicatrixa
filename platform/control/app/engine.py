@@ -15,9 +15,10 @@ import time
 import docker
 import httpx
 
-from . import ai, bus, db, gh
+from . import ai, bus, db, gh, mailer
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
+BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
 NETWORK = os.environ.get("CX_NETWORK", "cxnet")
 WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
 MAX_ATTEMPTS = 3
@@ -103,7 +104,23 @@ def _deploy_sync(service_id: int, trigger: str):
              (db.now(), dep))
         # keep serving the previous container if one is still running
         still = _existing_containers(service["slug"])
+        was_failed_already = service["status"] == "failed"
         set_status("live" if still else "failed")
+        if not still and not was_failed_already:
+            _notify_failure(project, service)
+
+
+def _notify_failure(project, service):
+    if not mailer.available():
+        return
+    owner = db.one("SELECT email FROM users WHERE id=?", (project["user_id"],))
+    if not owner:
+        return
+    try:
+        mailer.send_service_failed(owner["email"], project["name"], service["name"],
+                                   f"{BASE_URL}/projects/{project['id']}")
+    except Exception:
+        pass
 
 
 def refresh_project_status(project_id: int):

@@ -10,7 +10,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import ai, auth, bus, db, engine, gh, medic, metrics, watchdog
+from . import ai, auth, bus, db, engine, gh, mailer, medic, metrics, watchdog
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -109,10 +109,40 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
     is_admin = 1 if (email in ADMIN_EMAILS or not db.one("SELECT 1 FROM users LIMIT 1")) else 0
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,created_at) VALUES(?,?,?,?)",
                (email, auth.hash_password(password), is_admin, db.now())).lastrowid
+    _send_verification_email(uid, email)
     resp = RedirectResponse("/dashboard", status_code=303)
     resp.set_cookie(auth.COOKIE_NAME, auth.make_session(uid), max_age=auth.SESSION_TTL,
                     httponly=True, samesite="lax")
     return resp
+
+
+def _send_verification_email(user_id: int, email: str):
+    if not mailer.available():
+        return
+    token = auth.sign_state(f"verify:{user_id}", ttl=3 * 24 * 3600)
+    asyncio.create_task(asyncio.to_thread(
+        mailer.send_verification, email, f"{BASE_URL}/verify/{token}"))
+
+
+@app.get("/verify/{token}")
+async def verify_email(token: str):
+    data = auth.verify_state(token)
+    if not data or not data.startswith("verify:"):
+        return RedirectResponse("/dashboard?error=Invalid+or+expired+verification+link",
+                                status_code=303)
+    uid = int(data.split(":", 1)[1])
+    db.q("UPDATE users SET email_verified=1 WHERE id=?", (uid,))
+    return RedirectResponse("/dashboard?verified=1", status_code=303)
+
+
+@app.post("/verify/resend")
+async def resend_verification(request: Request):
+    user = current_user(request)
+    if not user:
+        return need_login(request)
+    if not user["email_verified"]:
+        _send_verification_email(user["id"], user["email"])
+    return RedirectResponse("/dashboard?resent=1", status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -153,10 +183,13 @@ async def dashboard(request: Request):
             "WHERE p.user_id=? ORDER BY s.id", (user["id"],)):
         services_by_project.setdefault(s["project_id"], []).append(s)
     await asyncio.to_thread(metrics.ensure_fresh)
+    qp = request.query_params
     return render(request, "dashboard.html", user=user, projects=projects,
                   services_by_project=services_by_project,
                   usage=metrics.user_usage(user["id"]),
-                  quota=metrics.user_quota(user))
+                  quota=metrics.user_quota(user),
+                  error=qp.get("error"), verified=qp.get("verified"),
+                  resent=qp.get("resent"))
 
 
 @app.get("/projects/new", response_class=HTMLResponse)

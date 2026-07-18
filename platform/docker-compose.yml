@@ -35,6 +35,8 @@ services:
       - DEFAULT_QUOTA_RAM_MB=${DEFAULT_QUOTA_RAM_MB:-2048}
       - DEFAULT_QUOTA_DISK_MB=${DEFAULT_QUOTA_DISK_MB:-5120}
       - RAM_PER_CONTAINER_MB=${RAM_PER_CONTAINER_MB:-768}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "cx-data:/data"
