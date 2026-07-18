@@ -48,6 +48,19 @@ def revoke_repo(repo_full: str):
         pass
 
 
+def revoke_installation(installation_id: int):
+    """Remove the entire GitHub App installation from the user's account (best-effort)."""
+    try:
+        httpx.delete(
+            f"{API}/app/installations/{installation_id}",
+            headers={"Authorization": f"Bearer {_app_jwt()}",
+                     "Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
 def build_manifest(base_url: str) -> dict:
     """Manifest for one-click GitHub App creation from the admin page."""
     return {

@@ -15,10 +15,32 @@
     <button class="btn">redeploy all</button></form>
   <form method="post" action="/projects/{{ project.id }}/stop" style="margin:0">
     <button class="btn ghost">stop all</button></form>
-  <form method="post" action="/projects/{{ project.id }}/delete" style="margin:0"
-        onsubmit="return confirm('Delete project, all services, containers and images?')">
-    <button class="btn danger">delete</button></form>
+  <button class="btn danger" onclick="showDeleteModal()" type="button">delete</button>
 </div>
+
+<!-- Delete modal -->
+<div id="del-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:28px 32px;max-width:440px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
+    <div style="font-size:17px;font-weight:700;margin-bottom:8px">Delete <em>{{ project.name }}</em>?</div>
+    <p class="muted" style="font-size:13.5px;margin:0 0 18px">This removes all containers, images and deploy history. The repos stay on GitHub unless you also uninstall the Cicatrixa App.</p>
+    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Cicatrixa GitHub App</div>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;margin-bottom:8px">
+        <input type="radio" name="del_revoke" value="1" checked> Also uninstall from GitHub &mdash; repo fully disconnected
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer">
+        <input type="radio" name="del_revoke" value="0"> Keep on GitHub &mdash; I can re-add this repo later without going to GitHub
+      </label>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('del-overlay').style.display='none'" type="button">Cancel</button>
+      <button class="btn danger" onclick="submitDelete()" type="button">Delete project</button>
+    </div>
+  </div>
+</div>
+<form id="del-form" method="post" action="/projects/{{ project.id }}/delete" style="display:none">
+  <input type="hidden" name="revoke" id="del-revoke-val" value="1">
+</form>
 
 <div class="card" style="margin-top:20px;display:flex;gap:26px;align-items:center;flex-wrap:wrap">
   <div><span class="mono muted" style="font-size:12px">AUTODEPLOY ON PUSH</span><br>
@@ -301,6 +323,20 @@ es.addEventListener('chat', e => {
   }
   chatlog.insertBefore(renderChat(m), streamWrap);
   chatlog.scrollTop = chatlog.scrollHeight;
+});
+
+// ---- delete modal ----
+function showDeleteModal(){
+  document.getElementById('del-overlay').style.display='flex';
+}
+function submitDelete(){
+  const v = document.querySelector('input[name=del_revoke]:checked');
+  document.getElementById('del-revoke-val').value = v ? v.value : '1';
+  document.getElementById('del-form').submit();
+}
+document.getElementById('del-overlay').addEventListener('click', e => {
+  if(e.target===document.getElementById('del-overlay'))
+    document.getElementById('del-overlay').style.display='none';
 });
 
 function sendChat(text) {

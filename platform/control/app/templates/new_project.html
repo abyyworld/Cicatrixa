@@ -9,9 +9,22 @@
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
   <form method="post" action="/projects" class="card">
-    <label>repositories <span style="text-transform:none">(check all that belong to this project)</span></label>
-    <input type="text" placeholder="filter…" oninput="filterRepos(this.value)" style="margin-bottom:8px">
-    <div id="repolist" style="max-height:300px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel2)">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+      <label style="margin:0">repositories <span style="text-transform:none;font-weight:400">(check all that belong to this project)</span></label>
+      {% if connection and connection.kind == 'app' %}
+      <button type="button" class="btn ghost sm" onclick="openInstallPopup()" id="add-repo-btn">+ add more repos</button>
+      {% endif %}
+    </div>
+    <div id="repo-updating" style="display:none;font-size:12px;font-family:var(--mono,monospace);color:var(--healed);margin-bottom:6px">
+      ↻ Waiting for GitHub… list updates automatically when you save.
+    </div>
+    <input type="text" placeholder="filter repos…" oninput="filterRepos(this.value)" style="margin-bottom:8px">
+    <div id="repolist" style="max-height:320px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;background:var(--panel2)">
+      {% if not repos %}
+      <div class="muted mono" style="font-size:12.5px;padding:14px 16px">
+        No repos connected yet. Click "+ add more repos" above to install Cicatrixa on your GitHub repos.
+      </div>
+      {% endif %}
       {% for r in repos %}
       <div class="repo-row" data-name="{{ r.full_name | lower }}"
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)">
@@ -30,23 +43,26 @@
       gets <span class="green">&lt;project&gt;.{{ base_domain }}</span>; the rest get
       <span class="green">&lt;project&gt;-&lt;repo&gt;.{{ base_domain }}</span></p>
     {% if connection and connection.kind == 'app' %}
-    <p class="muted mono" style="font-size:12px">missing a repo?
-      <a href="/connect/github/start" target="_blank">adjust the installation ↗</a>
-      — add the repo on GitHub, then <a href="/projects/new">refresh this page</a>.</p>
+    <p class="muted mono" style="font-size:12px;margin:4px 0 0">
+      repo still missing after adding? <a href="#" onclick="refreshRepoList();return false">refresh list</a>
+    </p>
     {% endif %}
     <label>project name <span style="text-transform:none">(optional — becomes the subdomain)</span></label>
     <input type="text" name="name" placeholder="my-app">
     <label>branch <span style="text-transform:none">(optional — blank uses each repo's default branch)</span></label>
     <input type="text" name="branch" placeholder="">
-    <div style="margin-top:22px"><button class="btn">Deploy →</button></div>
+    <div style="margin-top:22px"><button class="btn" id="deploy-btn">Deploy →</button></div>
   </form>
 </div>
 <script>
+// ---- repo list filter ----
 function filterRepos(q){
   q = q.toLowerCase();
   for (const row of document.querySelectorAll('.repo-row'))
     row.style.display = row.dataset.name.includes(q) ? 'flex' : 'none';
 }
+
+// ---- primary service radio logic ----
 function repoToggled(){
   const rows = [...document.querySelectorAll('.repo-row')];
   let primaryStillValid = false;
@@ -62,6 +78,73 @@ function repoToggled(){
     const first = rows.find(r => r.querySelector('input[type=checkbox]').checked);
     if (first) first.querySelector('input[type=radio]').checked = true;
   }
+}
+
+// ---- install popup + auto-refresh ----
+let _popup = null;
+let _pollTimer = null;
+let _knownRepos = new Set(
+  [...document.querySelectorAll('.repo-row')].map(r => r.dataset.name)
+);
+
+function openInstallPopup(){
+  if(_popup && !_popup.closed){ _popup.focus(); return; }
+  _popup = window.open('/connect/github/start','gh-install',
+    'width=1020,height=720,left='+(screen.width/2-510)+',top='+(screen.height/2-360));
+  document.getElementById('repo-updating').style.display = 'block';
+  startPolling();
+}
+
+function startPolling(){
+  if(_pollTimer) clearInterval(_pollTimer);
+  _pollTimer = setInterval(async () => {
+    const closed = !_popup || _popup.closed;
+    const repos = await fetch('/api/repos').then(r=>r.json()).catch(()=>null);
+    if(repos) updateRepoList(repos);
+    if(closed){
+      clearInterval(_pollTimer);
+      document.getElementById('repo-updating').style.display = 'none';
+    }
+  }, 2000);
+}
+
+// Listen for the postMessage the popup sends when GitHub redirects back
+window.addEventListener('message', e => {
+  if(e.data === 'cx:repos-updated') refreshRepoList();
+});
+
+async function refreshRepoList(){
+  const repos = await fetch('/api/repos').then(r=>r.json()).catch(()=>null);
+  if(repos) updateRepoList(repos);
+}
+
+function updateRepoList(repos){
+  const list = document.getElementById('repolist');
+  let idx = list.querySelectorAll('.repo-row').length;
+  let added = false;
+  for(const r of repos){
+    if(!_knownRepos.has(r.full_name.toLowerCase())){
+      _knownRepos.add(r.full_name.toLowerCase());
+      idx++;
+      const row = document.createElement('div');
+      row.className = 'repo-row';
+      row.dataset.name = r.full_name.toLowerCase();
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line)';
+      row.innerHTML =
+        `<input type="checkbox" name="repos" value="${r.full_name}" id="cb-${idx}" onchange="repoToggled()">
+         <label for="cb-${idx}" style="margin:0;text-transform:none;letter-spacing:0;font-size:13.5px;color:var(--ink);cursor:pointer;flex:1">
+           ${r.full_name}${r.private?' 🔒':''}</label>
+         <span class="primary-pick mono muted" style="font-size:11px;display:none">
+           <input type="radio" name="primary" value="${r.full_name}" id="pr-${idx}" style="vertical-align:middle">
+           <label for="pr-${idx}" style="display:inline;margin:0;text-transform:none;cursor:pointer">main</label></span>`;
+      // Remove the "no repos" placeholder if present
+      const empty = list.querySelector('.muted.mono');
+      if(empty) empty.remove();
+      list.appendChild(row);
+      added = true;
+    }
+  }
+  if(added) document.getElementById('repo-updating').style.display = 'none';
 }
 </script>
 {% endblock %}

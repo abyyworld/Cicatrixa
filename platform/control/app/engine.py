@@ -665,7 +665,7 @@ def stop_service(service):
     refresh_project_status(service["project_id"])
 
 
-def delete_service(service):
+def delete_service(service, revoke_github: bool = True):
     stop_service(service)
     try:
         for img in dock().images.list(name=f"cx-{service['slug']}"):
@@ -675,8 +675,7 @@ def delete_service(service):
     shutil.rmtree(os.path.join(WORK_ROOT, service["slug"]), ignore_errors=True)
     db.q("DELETE FROM deployments WHERE service_id=?", (service["id"],))
     db.q("DELETE FROM services WHERE id=?", (service["id"],))
-    # Remove the GitHub App from this repo so it disappears from the approved list
-    if service.get("repo_full"):
+    if revoke_github and service.get("repo_full"):
         gh.revoke_repo(service["repo_full"])
     refresh_project_status(service["project_id"])
 
@@ -686,9 +685,9 @@ def stop_project(project):
         stop_service(s)
 
 
-def delete_project(project):
+def delete_project(project, revoke_github: bool = True):
     for s in db.all_("SELECT * FROM services WHERE project_id=?", (project["id"],)):
-        delete_service(s)
+        delete_service(s, revoke_github=revoke_github)
     db.q("DELETE FROM chat_messages WHERE project_id=?", (project["id"],))
     db.q("DELETE FROM projects WHERE id=?", (project["id"],))
 

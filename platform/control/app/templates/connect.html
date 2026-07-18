@@ -13,7 +13,20 @@
     <p class="muted">One click. GitHub's own repo picker lets you grant access to exactly the
     repositories you choose, and push events flow to Cicatrixa instantly — deploys start the
     second you push.</p>
-    <a class="btn" href="/connect/github/start">Install &amp; choose repos →</a>
+    <button class="btn" type="button" onclick="openGHInstall()">Install &amp; choose repos →</button>
+    <p class="muted mono" style="font-size:12px;margin-top:10px" id="install-waiting" style="display:none">
+      Opening GitHub… complete the install there, this page updates automatically.</p>
+<script>
+function openGHInstall(){
+  const pop = window.open('/connect/github/start','gh-install',
+    'width=1020,height=720,left='+(screen.width/2-510)+',top='+(screen.height/2-360));
+  document.getElementById('install-waiting').style.display='block';
+  window.addEventListener('message', e => {
+    if(e.data==='cx:repos-updated') window.location='/projects/new';
+  });
+  const t = setInterval(()=>{ if(!pop||pop.closed){clearInterval(t);window.location='/projects/new';} },1500);
+}
+</script>
   </div>
   {% else %}
   <div class="card">

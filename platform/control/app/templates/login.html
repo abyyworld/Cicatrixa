@@ -6,11 +6,11 @@
   <h1>Welcome <em>back</em></h1>
   <p class="sub">Your services never noticed you were gone.</p>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="card">
+  <form method="post" action="/login" class="card" autocomplete="on">
     <label>email</label>
-    <input type="email" name="email" required autofocus>
+    <input type="email" name="email" required autofocus autocomplete="email">
     <label>password</label>
-    <input type="password" name="password" required>
+    <input type="password" name="password" required autocomplete="current-password">
     <div style="margin-top:20px"><button class="btn" style="width:100%">Log in →</button></div>
   </form>
   <p class="muted mono" style="font-size:13px;margin-top:16px">

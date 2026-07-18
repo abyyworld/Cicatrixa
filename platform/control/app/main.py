@@ -431,7 +431,9 @@ async def delete(request: Request, project_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
-    await asyncio.to_thread(engine.delete_project, project)
+    form = await request.form()
+    revoke = form.get("revoke", "1") != "0"
+    await asyncio.to_thread(engine.delete_project, project, revoke_github=revoke)
     return RedirectResponse("/dashboard", status_code=303)
 
 
@@ -507,7 +509,14 @@ async def connect_setup(request: Request):
     db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (int(uid),))
     db.q("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,created_at)"
          " VALUES(?,?,?,?,?)", (int(uid), "app", int(installation_id), login, db.now()))
-    return RedirectResponse("/projects/new", status_code=303)
+    # If opened as a popup, close and tell the parent to refresh its repo list.
+    # Otherwise do a normal redirect.
+    return HTMLResponse("""<!doctype html><html><body>
+<script>
+if(window.opener){window.opener.postMessage('cx:repos-updated','*');window.close();}
+else{window.location='/projects/new';}
+</script>
+<p>Connected! You can close this window.</p></body></html>""")
 
 
 @app.post("/connect/github/pat")
@@ -532,8 +541,32 @@ async def disconnect(request: Request):
     user = current_user(request)
     if not user:
         return need_login(request)
+    form = await request.form()
+    revoke = form.get("revoke", "0") == "1"
+    if revoke and gh.app_configured():
+        conn = db.one("SELECT * FROM github_connections WHERE user_id=? AND kind='app' "
+                      "ORDER BY id DESC LIMIT 1", (user["id"],))
+        if conn and conn["installation_id"]:
+            await asyncio.to_thread(gh.revoke_installation, conn["installation_id"])
     db.q("DELETE FROM github_connections WHERE user_id=?", (user["id"],))
     return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.get("/api/repos")
+async def api_repos(request: Request):
+    """Returns the current GitHub repo list as JSON — used for polling after install."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse([])
+    connection = db.one("SELECT * FROM github_connections WHERE user_id=? "
+                        "ORDER BY id DESC LIMIT 1", (user["id"],))
+    if not connection:
+        return JSONResponse([])
+    try:
+        repos = await asyncio.to_thread(gh.list_repos, connection)
+        return JSONResponse(repos)
+    except Exception:
+        return JSONResponse([])
 
 
 # ---------- admin: one-click GitHub App creation (manifest flow) ----------
