@@ -200,6 +200,8 @@ async def verify_code_cancel():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
     return render(request, "login.html", error=None)
 
 
@@ -509,14 +511,7 @@ async def connect_setup(request: Request):
     db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (int(uid),))
     db.q("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,created_at)"
          " VALUES(?,?,?,?,?)", (int(uid), "app", int(installation_id), login, db.now()))
-    # If opened as a popup, close and tell the parent to refresh its repo list.
-    # Otherwise do a normal redirect.
-    return HTMLResponse("""<!doctype html><html><body>
-<script>
-if(window.opener){window.opener.postMessage('cx:repos-updated','*');window.close();}
-else{window.location='/projects/new';}
-</script>
-<p>Connected! You can close this window.</p></body></html>""")
+    return RedirectResponse("/projects/new", status_code=303)
 
 
 @app.post("/connect/github/pat")

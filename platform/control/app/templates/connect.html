@@ -4,7 +4,7 @@
 <div style="max-width:560px;margin:40px auto">
   <div class="lbl-caps">repository access</div>
   <h1>Connect <em>GitHub</em></h1>
-  <p class="sub">Cicatrixa needs read access to the repositories you want to deploy.</p>
+  <p class="sub">Cicatrixa needs access to the repositories you want to deploy.</p>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
   {% if gh_app_configured %}
@@ -13,20 +13,13 @@
     <p class="muted">One click. GitHub's own repo picker lets you grant access to exactly the
     repositories you choose, and push events flow to Cicatrixa instantly — deploys start the
     second you push.</p>
-    <button class="btn" type="button" onclick="openGHInstall()">Install &amp; choose repos →</button>
-    <p class="muted mono" style="font-size:12px;margin-top:10px" id="install-waiting" style="display:none">
-      Opening GitHub… complete the install there, this page updates automatically.</p>
-<script>
-function openGHInstall(){
-  const pop = window.open('/connect/github/start','gh-install',
-    'width=1020,height=720,left='+(screen.width/2-510)+',top='+(screen.height/2-360));
-  document.getElementById('install-waiting').style.display='block';
-  window.addEventListener('message', e => {
-    if(e.data==='cx:repos-updated') window.location='/projects/new';
-  });
-  const t = setInterval(()=>{ if(!pop||pop.closed){clearInterval(t);window.location='/projects/new';} },1500);
-}
-</script>
+    <a class="btn" href="/connect/github/start" target="_blank" id="install-btn"
+       onclick="onInstallClick()">Install &amp; choose repos →</a>
+    <div id="install-hint" style="display:none;margin-top:14px;font-size:13px;padding:12px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:6px">
+      GitHub opened in a new tab. Select your repos there, click <strong>Save / Install</strong>,
+      then <strong>come back to this tab</strong> — you'll be taken to the project page automatically.
+      <br><a href="/projects/new" style="margin-top:8px;display:inline-block">Already done? Go to projects →</a>
+    </div>
   </div>
   {% else %}
   <div class="card">
@@ -49,11 +42,23 @@ function openGHInstall(){
       <code>Contents: read</code> + <code>Metadata</code>. (Avoid classic <code>repo</code>-scope
       tokens — they grant far more than needed.) Updates are picked up by the polling
       watchdog (~3&nbsp;min).</p>
-    <form method="post" action="/connect/github/pat">
+    <form method="post" action="/connect/github/pat" autocomplete="on">
       <label>token</label>
-      <input type="password" name="token" placeholder="github_pat_… or ghp_…" required>
+      <input type="password" name="token" placeholder="github_pat_… or ghp_…" required autocomplete="off">
       <div style="margin-top:16px"><button class="btn">Connect →</button></div>
     </form>
   </div>
 </div>
+<script>
+function onInstallClick(){
+  document.getElementById('install-hint').style.display = 'block';
+  // When user comes back to this tab, go to projects/new so repos load
+  document.addEventListener('visibilitychange', function handler(){
+    if(!document.hidden){
+      document.removeEventListener('visibilitychange', handler);
+      window.location = '/projects/new';
+    }
+  });
+}
+</script>
 {% endblock %}
