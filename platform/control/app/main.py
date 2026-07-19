@@ -8,7 +8,7 @@ import re
 import docker.errors
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
-                               StreamingResponse)
+                               Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
 from . import ai, auth, bus, db, dbprovision, engine, gh, mailer, medic, metrics, watchdog
@@ -200,6 +200,8 @@ async def verify_code_cancel():
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
     return render(request, "login.html", error=None)
 
 
@@ -477,7 +479,9 @@ async def delete(request: Request, project_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
-    await asyncio.to_thread(engine.delete_project, project)
+    form = await request.form()
+    revoke = form.get("revoke", "1") != "0"
+    await asyncio.to_thread(engine.delete_project, project, revoke_github=revoke)
     return RedirectResponse("/dashboard", status_code=303)
 
 
@@ -519,6 +523,14 @@ async def connect_start(request: Request):
         return need_login(request)
     if not gh.app_configured():
         return RedirectResponse("/connect/github", status_code=303)
+    existing = db.one("SELECT * FROM github_connections WHERE user_id=? AND kind='app' "
+                      "ORDER BY id DESC LIMIT 1", (user["id"],))
+    if existing and existing["installation_id"]:
+        # App already installed — send to GitHub's installation settings page
+        # (has repo picker + Save button) rather than the fresh-install page which
+        # has no proceed button when the app is already installed.
+        return RedirectResponse(
+            f"https://github.com/settings/installations/{existing['installation_id']}")
     state = auth.sign_state(str(user["id"]))
     return RedirectResponse(
         f"https://github.com/apps/{gh.app_slug()}/installations/new?state={state}")
@@ -570,8 +582,32 @@ async def disconnect(request: Request):
     user = current_user(request)
     if not user:
         return need_login(request)
+    form = await request.form()
+    revoke = form.get("revoke", "0") == "1"
+    if revoke and gh.app_configured():
+        conn = db.one("SELECT * FROM github_connections WHERE user_id=? AND kind='app' "
+                      "ORDER BY id DESC LIMIT 1", (user["id"],))
+        if conn and conn["installation_id"]:
+            await asyncio.to_thread(gh.revoke_installation, conn["installation_id"])
     db.q("DELETE FROM github_connections WHERE user_id=?", (user["id"],))
     return RedirectResponse("/dashboard", status_code=303)
+
+
+@app.get("/api/repos")
+async def api_repos(request: Request):
+    """Returns the current GitHub repo list as JSON — used for polling after install."""
+    user = current_user(request)
+    if not user:
+        return JSONResponse([])
+    connection = db.one("SELECT * FROM github_connections WHERE user_id=? "
+                        "ORDER BY id DESC LIMIT 1", (user["id"],))
+    if not connection:
+        return JSONResponse([])
+    try:
+        repos = await asyncio.to_thread(gh.list_repos, connection)
+        return JSONResponse(repos)
+    except Exception:
+        return JSONResponse([])
 
 
 # ---------- admin: one-click GitHub App creation (manifest flow) ----------
@@ -650,3 +686,19 @@ async def github_webhook(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True}
+
+
+FAVICON_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="104" fill="#0A0F0C"/>
+<path d="M150 150 L256 256" stroke="#FF5257" stroke-width="36" stroke-linecap="round"/>
+<path d="M256 256 L362 362" stroke="#40D967" stroke-width="36" stroke-linecap="round"/>
+<g stroke="#c9d1d9" stroke-width="17" stroke-linecap="round">
+<path d="M168 216 L216 168"/><path d="M211 259 L259 211"/>
+<path d="M253 301 L301 253"/><path d="M296 344 L344 296"/></g></svg>"""
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(FAVICON_SVG, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})

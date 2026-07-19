@@ -15,10 +15,45 @@
     <button class="btn">redeploy all</button></form>
   <form method="post" action="/projects/{{ project.id }}/stop" style="margin:0">
     <button class="btn ghost">stop all</button></form>
-  <form method="post" action="/projects/{{ project.id }}/delete" style="margin:0"
-        onsubmit="return confirm('Delete project, all services, containers and images?')">
-    <button class="btn danger">delete</button></form>
+  <button class="btn danger" onclick="showDeleteModal()" type="button">delete</button>
 </div>
+
+<!-- Delete modal -->
+<div id="del-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:30px 28px;max-width:420px;width:92%;box-shadow:0 12px 48px rgba(0,0,0,.4);font-family:system-ui,-apple-system,sans-serif">
+    <div style="font-size:18px;font-weight:700;margin-bottom:6px;letter-spacing:-.3px">Delete project?</div>
+    <div style="font-size:13.5px;color:var(--muted);line-height:1.55;margin-bottom:20px">
+      Removes all containers, images and deploy history.
+      Your GitHub repos are untouched unless you choose to uninstall below.
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:22px">
+      <div style="padding:11px 14px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:var(--panel2);border-bottom:1px solid var(--line)">GitHub App</div>
+      <label style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;cursor:pointer;border-bottom:1px solid var(--line)" id="del-opt-yes">
+        <input type="radio" name="del_revoke" value="1" checked style="margin-top:2px;flex-shrink:0">
+        <span style="font-size:13.5px;line-height:1.4;font-family:system-ui,-apple-system,sans-serif">
+          <strong>Uninstall from GitHub</strong><br>
+          <span style="color:var(--muted);font-size:12.5px">Fully disconnected — re-adding requires a new install</span>
+        </span>
+      </label>
+      <label style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;cursor:pointer" id="del-opt-no">
+        <input type="radio" name="del_revoke" value="0" style="margin-top:2px;flex-shrink:0">
+        <span style="font-size:13.5px;line-height:1.4;font-family:system-ui,-apple-system,sans-serif">
+          <strong>Keep on GitHub</strong><br>
+          <span style="color:var(--muted);font-size:12.5px">Re-add this project any time — repo already approved</span>
+        </span>
+      </label>
+    </div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('del-overlay').style.display='none'" type="button">Cancel</button>
+      <button class="btn danger" onclick="submitDelete()" type="button">Delete project</button>
+    </div>
+  </div>
+</div>
+<form id="del-form" method="post" action="/projects/{{ project.id }}/delete" style="display:none">
+  <input type="hidden" name="revoke" id="del-revoke-val" value="1">
+</form>
 
 <div class="card" style="margin-top:20px;display:flex;gap:26px;align-items:center;flex-wrap:wrap">
   <div><span class="mono muted" style="font-size:12px">AUTODEPLOY ON PUSH</span><br>
@@ -108,44 +143,98 @@
   </form>
 </details>
 
-<h2>Consult <span class="lbl-caps" style="margin-left:10px">describe a problem — the AI investigates, fixes, pushes to GitHub, redeploys</span></h2>
-<div class="card" style="padding:0">
-  <div id="chatlog" style="max-height:440px;overflow-y:auto;padding:16px 20px">
-    {% if not chat %}<div class="muted mono" style="font-size:12.5px">No consultations yet.
-      Try: “run an error check on the whole project” or “the login endpoint returns 500 — find and fix it”.</div>{% endif %}
+<style>
+#medic-panel { border-radius:8px; overflow:hidden; border:1px solid var(--line); margin-top:4px }
+#medic-header { background:var(--panel2); padding:14px 18px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px }
+#medic-header .medic-title { font-size:15px; font-weight:700; letter-spacing:-.3px }
+#medic-header .medic-sub { font-size:12px; color:var(--muted) }
+#chatlog { min-height:200px; max-height:520px; overflow-y:auto; padding:16px 20px }
+.cx-msg { margin-bottom:16px }
+.cx-who { font-size:10px; letter-spacing:.12em; text-transform:uppercase; font-weight:600; margin-bottom:4px }
+.cx-who.user { color:var(--muted) }
+.cx-who.agent { color:var(--healed) }
+.cx-bubble { font-size:13.5px; line-height:1.6; white-space:pre-wrap; word-break:break-word }
+.cx-bubble.user { color:var(--muted) }
+.cx-bubble p { margin:0 0 6px }
+.cx-bubble code { font-family:var(--mono,monospace); font-size:12px; background:var(--panel2); padding:1px 5px; border-radius:3px }
+.cx-bubble pre { background:var(--panel2); padding:10px 14px; border-radius:4px; overflow-x:auto; font-size:12px; margin:6px 0 }
+.cx-status { font-size:11.5px; font-family:var(--mono,monospace); color:var(--muted); margin:4px 0; padding-left:2px }
+.cx-fix { border:1px solid var(--line); border-radius:6px; background:var(--panel2); padding:12px 14px; margin-top:8px }
+.cx-fix-head { font-size:12px; font-family:var(--mono,monospace); font-weight:600; margin-bottom:8px }
+.cx-patch details { margin-top:6px }
+.cx-patch summary { font-size:11.5px; font-family:var(--mono,monospace); cursor:pointer; color:var(--muted) }
+.cx-patch-diff { font-size:11.5px; font-family:var(--mono,monospace); margin-top:6px; line-height:1.5 }
+.cx-stream { font-size:13.5px; line-height:1.6; color:var(--ink) }
+.cx-cursor { display:inline-block; width:2px; height:1em; background:var(--healed); margin-left:1px; animation:blink .7s step-end infinite; vertical-align:text-bottom }
+@keyframes blink { 50% { opacity:0 } }
+.quick-actions { display:flex; gap:8px; flex-wrap:wrap; padding:10px 18px; border-top:1px solid var(--line); background:var(--panel2) }
+.qa-btn { font-size:12px; font-family:var(--mono,monospace); background:none; border:1px solid var(--line); border-radius:4px; padding:5px 10px; cursor:pointer; color:var(--muted); transition:border-color .15s,color .15s }
+.qa-btn:hover { border-color:var(--healed); color:var(--healed) }
+#chatform { display:flex; gap:10px; border-top:1px solid var(--line); padding:12px 14px; margin:0; background:var(--panel) }
+#chatinput { flex:1; font-size:13px }
+</style>
+
+<h2 style="margin-bottom:6px">AI Medic <span class="lbl-caps" style="margin-left:10px">watches live production · investigates · pushes fixes · redeploys</span></h2>
+{% if services and services[0].status in ('failed','error') %}
+<div class="err" style="margin-bottom:10px">Service is failing — ask the medic to investigate: <a href="#" onclick="sendChat('run a full error check — read the container logs and source code, find the root cause, and propose a fix');return false" style="color:inherit;text-decoration:underline">run full error check →</a></div>
+{% endif %}
+<div id="medic-panel">
+  <div id="medic-header">
+    <div>
+      <div class="medic-title">Consult</div>
+      <div class="medic-sub">Reads live container logs &amp; source code &middot; proposes exact patches &middot; commits to GitHub &amp; redeploys on approval</div>
+    </div>
+  </div>
+  <div id="chatlog">
+    {% if not chat %}
+    <div class="muted" style="font-size:13px;padding:8px 0">No consultations yet. The medic has access to your container logs, deployment history, and source code right now.</div>
+    {% endif %}
     {% for m in chat %}
-    <div class="chatmsg" data-kind="{{ m.kind }}">
+    <div class="cx-msg">
       {% if m.kind == 'status' %}
-        <div class="mono muted" style="font-size:12px;margin:6px 0">{{ m.content }}</div>
+        <div class="cx-status">{{ m.content }}</div>
       {% else %}
-        <div class="lbl-caps" style="margin-top:12px">{{ 'you' if m.role == 'user' else 'cicatrixa' }}</div>
-        <div style="font-size:13.5px;margin:2px 0 4px;{% if m.role == 'user' %}color:var(--ink2){% endif %}">{{ m.content }}</div>
+        <div class="cx-who {{ m.role }}">{{ 'you' if m.role == 'user' else 'cicatrixa medic' }}</div>
+        <div class="cx-bubble {{ m.role }}">{{ m.content }}</div>
         {% if m.kind == 'fix' %}
-        <div style="border:1px solid var(--ink);border-radius:2px;background:var(--paper2);padding:12px 14px;margin:6px 0">
-          <div class="mono" style="font-size:12px"><b>proposed commit:</b> {{ m.data.commit_message }}
-            <span class="muted">→ {{ m.data.service }}</span></div>
+        <div class="cx-fix">
+          <div class="cx-fix-head">proposed commit: {{ m.data.commit_message }}
+            <span class="muted"> → {{ m.data.service }}</span></div>
+          <div class="cx-patch">
           {% for p in m.data.patches %}
-          <details style="margin-top:6px"><summary class="mono muted" style="font-size:11.5px;cursor:pointer">🩹 {{ p.file }}</summary>
-            <div class="mono" style="font-size:11px;margin-top:4px"><span class="red">− {{ p.find[:300] }}</span><br>
-              <span class="green">+ {{ (p.replace or '')[:300] }}</span></div></details>
+          <details><summary>&#128657; {{ p.file }}</summary>
+            <div class="cx-patch-diff"><span class="red">− {{ p.find[:400] }}</span><br>
+              <span class="green">+ {{ (p.replace or '')[:400] }}</span></div></details>
           {% endfor %}
+          </div>
           {% if m.data.applied %}
-            <div class="mono green" style="font-size:12px;margin-top:8px">✔ applied — pushed {{ (m.data.pushed_sha or '')[:10] }}</div>
+            <div class="mono green" style="font-size:12px;margin-top:10px">&#10004; pushed {{ (m.data.pushed_sha or '')[:10] }} &middot; redeploying</div>
           {% else %}
-            <form method="post" action="/projects/{{ project.id }}/chat/{{ m.id }}/apply" style="margin-top:10px"
+            <form method="post" action="/projects/{{ project.id }}/chat/{{ m.id }}/apply" style="margin-top:12px"
                   onsubmit="return confirm('Commit this fix to {{ m.data.service }}, push to GitHub and redeploy?')">
-              <button class="btn sm">Apply — push to GitHub &amp; redeploy →</button></form>
+              <button class="btn sm">Apply fix &mdash; commit, push &amp; redeploy &rarr;</button></form>
           {% endif %}
         </div>
         {% endif %}
       {% endif %}
     </div>
     {% endfor %}
-    <div id="thinking" class="mono muted" style="display:none;font-size:12px;margin:8px 0">🧠 Cicatrixa is investigating…</div>
+    <div id="cx-stream-wrap" style="display:none" class="cx-msg">
+      <div class="cx-who agent">cicatrixa medic</div>
+      <div id="cx-stream" class="cx-stream"></div>
+      <span class="cx-cursor" id="cx-cursor"></span>
+    </div>
   </div>
-  <form id="chatform" style="display:flex;gap:10px;border-top:1px solid var(--ink);padding:12px 14px;margin:0">
-    <input type="text" id="chatinput" placeholder="e.g. run an error check on the backend — fix anything you find" autocomplete="off" style="flex:1">
-    <button class="btn sm">Send</button>
+  <div class="quick-actions">
+    <span class="muted" style="font-size:11px;font-family:var(--mono,monospace);align-self:center">quick:</span>
+    <button class="qa-btn" onclick="sendChat('run a full error check — read container logs and source code, find any bugs')">full error scan</button>
+    <button class="qa-btn" onclick="sendChat('check the health of all services and tell me what each one is doing right now')">health check</button>
+    <button class="qa-btn" onclick="sendChat('what was the last deploy and did it succeed? show me any errors from the logs')">last deploy status</button>
+    <button class="qa-btn" onclick="sendChat('look at the source code and suggest the highest-impact improvements I could make')">suggest improvements</button>
+  </div>
+  <form id="chatform">
+    <input type="text" id="chatinput" placeholder="e.g. the /stats endpoint crashes — find the bug and fix it" autocomplete="off">
+    <button class="btn sm" id="sendbtn">Send</button>
   </form>
 </div>
 
@@ -187,64 +276,133 @@ es.addEventListener('status', e => {
 
 // ---- consultation chat ----
 const chatlog = document.getElementById('chatlog');
-const thinking = document.getElementById('thinking');
+const streamWrap = document.getElementById('cx-stream-wrap');
+const streamDiv  = document.getElementById('cx-stream');
+const cursor     = document.getElementById('cx-cursor');
+
 chatlog.scrollTop = chatlog.scrollHeight;
 
-function el(tag, style, text){ const n = document.createElement(tag);
-  if (style) n.style.cssText = style; if (text !== undefined) n.textContent = text; return n; }
+// Simple markdown renderer (bold, inline code, code blocks, newlines)
+function mdToHtml(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/```([\s\S]*?)```/g, (_,c)=>'<pre>'+c+'</pre>')
+    .replace(/`([^`]+)`/g, (_,c)=>'<code>'+c+'</code>')
+    .replace(/\*\*([^*]+)\*\*/g, (_,c)=>'<strong>'+c+'</strong>')
+    .replace(/\n/g,'<br>');
+}
 
-function renderChat(m){
-  const wrap = el('div');
-  if (m.kind === 'status') {
-    const d = el('div','font-size:12px;margin:6px 0', m.content);
-    d.className = 'mono muted'; wrap.append(d);
+function el(tag,cls,html){
+  const n=document.createElement(tag);
+  if(cls) n.className=cls;
+  if(html!==undefined) n.innerHTML=html;
+  return n;
+}
+
+function renderFix(m) {
+  const fix = el('div','cx-fix');
+  fix.innerHTML = '<div class="cx-fix-head">proposed commit: '
+    + (m.data.commit_message||'') + ' <span class="muted">→ '+(m.data.service||'')+'</span></div>';
+  const patches = el('div','cx-patch');
+  (m.data.patches||[]).forEach(p => {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = '🩹 '+p.file;
+    const diff = el('div','cx-patch-diff');
+    diff.innerHTML = '<span class="red">− '+(p.find||'').slice(0,400).replace(/</g,'&lt;')+'</span><br>'
+      +'<span class="green">+ '+(p.replace||'').slice(0,400).replace(/</g,'&lt;')+'</span>';
+    det.append(sum,diff); patches.append(det);
+  });
+  fix.append(patches);
+  if(m.data.applied){
+    const ok=el('div','mono green'); ok.style.cssText='font-size:12px;margin-top:10px';
+    ok.textContent='✔ pushed '+(m.data.pushed_sha||'').slice(0,10)+' · redeploying';
+    fix.append(ok);
   } else {
-    const who = el('div','margin-top:12px', m.role === 'user' ? 'you' : 'cicatrixa');
-    who.className = 'lbl-caps';
-    const body = el('div','font-size:13.5px;margin:2px 0 4px'+(m.role==='user'?';color:var(--ink2)':''), m.content);
-    wrap.append(who, body);
-    if (m.kind === 'fix') {
-      const card = el('div','border:1px solid var(--ink);border-radius:2px;background:var(--paper2);padding:12px 14px;margin:6px 0');
-      const head = el('div','font-size:12px'); head.className='mono';
-      head.textContent = 'proposed commit: ' + (m.data.commit_message||'') + ' → ' + (m.data.service||'');
-      card.append(head);
-      (m.data.patches||[]).forEach(p => {
-        const det = document.createElement('details'); det.style.marginTop='6px';
-        const sum = document.createElement('summary'); sum.className='mono muted';
-        sum.style.cssText='font-size:11.5px;cursor:pointer'; sum.textContent='🩹 '+p.file;
-        const diff = el('div','font-size:11px;margin-top:4px'); diff.className='mono';
-        const minus = el('span','', '− '+(p.find||'').slice(0,300)); minus.className='red';
-        const plus = el('span','', '+ '+(p.replace||'').slice(0,300)); plus.className='green';
-        diff.append(minus, document.createElement('br'), plus);
-        det.append(sum, diff); card.append(det);
-      });
-      const form = document.createElement('form');
-      form.method='post'; form.action='/projects/{{ project.id }}/chat/'+m.id+'/apply';
-      form.style.marginTop='10px';
-      form.onsubmit = () => confirm('Commit this fix to '+(m.data.service||'')+', push to GitHub and redeploy?');
-      const btn = document.createElement('button'); btn.className='btn sm';
-      btn.textContent='Apply — push to GitHub & redeploy →';
-      form.append(btn); card.append(form);
-      wrap.append(card);
-    }
+    const form=document.createElement('form');
+    form.method='post'; form.action='/projects/{{ project.id }}/chat/'+m.id+'/apply';
+    form.style.marginTop='12px';
+    form.onsubmit=()=>confirm('Commit to '+(m.data.service||'')+', push to GitHub and redeploy?');
+    const btn=document.createElement('button'); btn.className='btn sm';
+    btn.textContent='Apply fix — commit, push & redeploy →';
+    form.append(btn); fix.append(form);
+  }
+  return fix;
+}
+
+function renderChat(m) {
+  const wrap = el('div','cx-msg');
+  if(m.kind==='status'){
+    wrap.append(el('div','cx-status',m.content.replace(/</g,'&lt;')));
+  } else {
+    const who = el('div','cx-who '+(m.role==='user'?'user':'agent'));
+    who.textContent = m.role==='user' ? 'you' : 'cicatrixa medic';
+    const body = el('div','cx-bubble '+(m.role==='user'?'user':''));
+    body.innerHTML = mdToHtml(m.content);
+    wrap.append(who,body);
+    if(m.kind==='fix') wrap.append(renderFix(m));
   }
   return wrap;
 }
 
-es.addEventListener('chat', e => {
-  const m = JSON.parse(e.data);
-  if (m.role === 'agent' && m.kind !== 'status') thinking.style.display = 'none';
-  chatlog.insertBefore(renderChat(m), thinking);
+// Streaming: show reply text in real time as tokens arrive
+es.addEventListener('stream', e => {
+  const d = JSON.parse(e.data);
+  streamWrap.style.display = 'block';
+  streamDiv.innerHTML = mdToHtml(d.text||'');
   chatlog.scrollTop = chatlog.scrollHeight;
 });
+
+es.addEventListener('stream_end', () => {
+  cursor.style.display = 'none';
+});
+
+es.addEventListener('chat', e => {
+  const m = JSON.parse(e.data);
+  if(m.role==='agent' && m.kind!=='status'){
+    // Replace streaming bubble with the real rendered message
+    streamWrap.style.display = 'none';
+    streamDiv.textContent = '';
+    cursor.style.display = '';
+    document.getElementById('sendbtn').disabled = false;
+  }
+  chatlog.insertBefore(renderChat(m), streamWrap);
+  chatlog.scrollTop = chatlog.scrollHeight;
+});
+
+// ---- delete modal ----
+function showDeleteModal(){
+  document.getElementById('del-overlay').style.display='flex';
+}
+function submitDelete(){
+  const v = document.querySelector('input[name=del_revoke]:checked');
+  document.getElementById('del-revoke-val').value = v ? v.value : '1';
+  document.getElementById('del-form').submit();
+}
+document.getElementById('del-overlay').addEventListener('click', e => {
+  if(e.target===document.getElementById('del-overlay'))
+    document.getElementById('del-overlay').style.display='none';
+});
+
+function sendChat(text) {
+  if(!text) return;
+  const input = document.getElementById('chatinput');
+  input.value = text;
+  document.getElementById('chatform').dispatchEvent(new Event('submit'));
+}
 
 document.getElementById('chatform').addEventListener('submit', async ev => {
   ev.preventDefault();
   const input = document.getElementById('chatinput');
   const text = input.value.trim();
-  if (!text) return;
+  if(!text) return;
   input.value = '';
-  thinking.style.display = 'block';
+  document.getElementById('sendbtn').disabled = true;
+  // Show user message immediately
+  chatlog.insertBefore(renderChat({role:'user',kind:'text',content:text}), streamWrap);
+  streamWrap.style.display = 'block';
+  streamDiv.textContent = '';
+  cursor.style.display = '';
   chatlog.scrollTop = chatlog.scrollHeight;
   await fetch('/projects/{{ project.id }}/chat', {method:'POST',
     headers:{'Content-Type':'application/x-www-form-urlencoded'},

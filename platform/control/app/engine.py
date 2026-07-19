@@ -674,7 +674,7 @@ def stop_service(service):
     refresh_project_status(service["project_id"])
 
 
-def delete_service(service):
+def delete_service(service, revoke_github: bool = True):
     stop_service(service)
     try:
         for img in dock().images.list(name=f"cx-{service['slug']}"):
@@ -684,6 +684,8 @@ def delete_service(service):
     shutil.rmtree(os.path.join(WORK_ROOT, service["slug"]), ignore_errors=True)
     db.q("DELETE FROM deployments WHERE service_id=?", (service["id"],))
     db.q("DELETE FROM services WHERE id=?", (service["id"],))
+    if revoke_github and service["repo_full"]:
+        gh.revoke_repo(service["repo_full"])
     refresh_project_status(service["project_id"])
 
 
@@ -692,10 +694,10 @@ def stop_project(project):
         stop_service(s)
 
 
-def delete_project(project):
+def delete_project(project, revoke_github: bool = True):
     from . import dbprovision
     for s in db.all_("SELECT * FROM services WHERE project_id=?", (project["id"],)):
-        delete_service(s)
+        delete_service(s, revoke_github=revoke_github)
     for d in db.all_("SELECT id FROM databases WHERE project_id=?", (project["id"],)):
         dbprovision.delete(d["id"])
     db.q("DELETE FROM chat_messages WHERE project_id=?", (project["id"],))

@@ -45,7 +45,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=cxnet"
-      - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control.entrypoints=web"
       - "traefik.http.routers.cx-control.service=cx-control"
       - "traefik.http.routers.cx-control.middlewares=cx-to-https"
@@ -59,7 +59,7 @@ services:
       - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
       - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=true"
       # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
-      - "traefik.http.routers.cx-control-secure.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.cx-control-secure.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control-secure.entrypoints=websecure"
       - "traefik.http.routers.cx-control-secure.service=cx-control"
       - "traefik.http.routers.cx-control-secure.tls.certresolver=le"

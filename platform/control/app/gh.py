@@ -23,10 +23,48 @@ def app_slug() -> str | None:
     return db.setting("gh_app_slug")
 
 
+def _app_jwt() -> str:
+    """Generate a short-lived JWT signed with the app's private key."""
+    app_id = db.setting("gh_app_id")
+    pem = db.setting("gh_app_pem")
+    if not app_id or not pem:
+        raise ValueError("GitHub App not configured")
+    now = int(time.time())
+    return jwt.encode({"iss": int(app_id), "iat": now - 60, "exp": now + 600},
+                      pem, algorithm="RS256")
+
+
+def revoke_repo(repo_full: str):
+    """Remove the GitHub App installation from a specific repo (best-effort)."""
+    try:
+        owner, name = repo_full.split("/", 1)
+        httpx.delete(
+            f"{API}/repos/{owner}/{name}/installation",
+            headers={"Authorization": f"Bearer {_app_jwt()}",
+                     "Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
+def revoke_installation(installation_id: int):
+    """Remove the entire GitHub App installation from the user's account (best-effort)."""
+    try:
+        httpx.delete(
+            f"{API}/app/installations/{installation_id}",
+            headers={"Authorization": f"Bearer {_app_jwt()}",
+                     "Accept": "application/vnd.github+json"},
+            timeout=15,
+        )
+    except Exception:
+        pass
+
+
 def build_manifest(base_url: str) -> dict:
     """Manifest for one-click GitHub App creation from the admin page."""
     return {
-        "name": db.setting("gh_app_name", "cicatrixa-deploy"),
+        "name": db.setting("gh_app_name", "Cicatrixa"),
         "url": base_url,
         "hook_attributes": {"url": f"{base_url}/api/webhooks/github", "active": True},
         "redirect_url": f"{base_url}/admin/github/callback",

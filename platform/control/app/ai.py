@@ -23,13 +23,47 @@ def _ask(instructions: str, prompt: str, max_tokens: int = 4000) -> str:
     )
     r.raise_for_status()
     data = r.json()
-    # collect assistant text across output items
     parts = []
     for item in data.get("output", []):
         for c in item.get("content", []) or []:
             if c.get("type") in ("output_text", "text"):
                 parts.append(c.get("text", ""))
     return "\n".join(parts).strip()
+
+
+def _ask_streaming(instructions: str, prompt: str, on_chunk, max_tokens: int = 4000) -> str:
+    """Like _ask but calls on_chunk(text) for each token as it arrives. Returns full text."""
+    full = []
+    with httpx.stream(
+        "POST",
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        json={"model": MODEL, "instructions": instructions, "input": prompt,
+              "max_output_tokens": max_tokens, "stream": True},
+        timeout=180,
+    ) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            raw = line[6:]
+            if raw.strip() in ("[DONE]", ""):
+                continue
+            try:
+                ev = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            t = ev.get("type", "")
+            delta = None
+            if t == "response.output_text.delta":
+                delta = ev.get("delta", "")
+            elif t == "content_block_delta":
+                delta = ev.get("delta", {}).get("text", "")
+            if delta:
+                full.append(delta)
+                if on_chunk:
+                    on_chunk(delta)
+    return "".join(full)
 
 
 def _json_from(text: str) -> dict | None:
@@ -149,29 +183,33 @@ def fix_plan(dockerfile: str, error_log: str, tree: str, files: dict[str, str],
         return None
 
 
-CHAT_INSTRUCTIONS = """You are the on-call physician for a user's deployed project on the
-Cicatrixa hosting platform. The user talks to you in a chat. You are given the project's
-services (status, ports, container logs, recent deploy logs) and their repositories.
+CHAT_INSTRUCTIONS = """You are an autonomous SRE agent embedded in Cicatrixa, a self-healing
+hosting platform. You have full visibility into the user's LIVE PRODUCTION environment:
+container logs, deployment history, build logs, running service status, and source code.
 
-Investigate what the user asks — an error check, a suspected bug, a question, or a change
-they want made. Ground every claim in the logs and code you were shown; never invent errors.
-When a concrete CODE change would fix a real problem — or implement what the user explicitly
-asked for — propose it as exact patches: if the user approves, the platform commits them to
-the user's GitHub repository and redeploys, so patches must be minimal, correct, and
-self-contained.
+This is NOT a code assistant. You are watching production. You know things GitHub Copilot and
+Claude.ai cannot know: what errors are happening RIGHT NOW in the running containers, which
+deploys failed and why, what the health endpoints are returning.
+
+Your job:
+1. Investigate problems by reading the actual logs and code you were given — ground every
+   claim in what you can see. Never invent errors. Cite specific log lines.
+2. When you find a real bug or implement a requested change, produce EXACT patches.
+   The platform will commit them to GitHub and redeploy automatically if the user approves.
+3. Be direct and specific. Name the exact file, line, and error. Say what it is and how you
+   know. Skip preamble.
 
 Reply with ONLY a JSON object:
-{"reply": "<what you found / did, plain language, a few sentences — this is shown in chat>",
- "service": "<name of the service the patches apply to>" | null,
- "patches": [{"file": "relative/path", "find": "<exact literal text>", "replace": "<new text>"}] | null,
- "commit_message": "<one-line commit message>" | null}
-- "find" must be an EXACT substring of the current file; it is literally replaced (all
-  occurrences). Max 8 patches, one service per fix.
-- Patch "file" paths are relative to that service's repository root — do NOT prefix them
-  with the service name.
-- No real problem or no code fix warranted -> patches: null and say so in "reply".
-To read more source files first, reply ONLY: {"need_files": ["<service-name>/relative/path",
-...]} (max 8) — paths are prefixed with the service name."""
+{"reply": "<your findings — plain language, specific, cite log lines. This appears in chat.>",
+ "service": "<name of the service the patches apply to, or null>",
+ "patches": [{"file": "relative/path", "find": "<EXACT literal substring>", "replace": "<replacement>"}] | null,
+ "commit_message": "<imperative-mood one-liner, e.g. 'Fix ZeroDivisionError in /stats when items is empty'>" | null}
+Rules:
+- "find" is literally replaced; it must exist verbatim in the current file. Max 8 patches.
+- File paths are relative to the service repo root — no service name prefix.
+- If no code change is needed, set patches: null and explain what you found.
+To inspect more source files first: reply ONLY {"need_files": ["<service-name>/path", ...]}
+(max 8; service name is the prefix)."""
 
 
 def chat_agent(context: str, read_file=None) -> dict | None:
@@ -179,6 +217,32 @@ def chat_agent(context: str, read_file=None) -> dict | None:
         return None
     try:
         return _ask_with_files(CHAT_INSTRUCTIONS, context, read_file, rounds=3)
+    except Exception:
+        return None
+
+
+def chat_agent_streaming(context: str, on_chunk, read_file=None) -> dict | None:
+    """Run the chat agent with streaming tokens delivered to on_chunk(text).
+    Returns the final parsed dict (same as chat_agent) or None on error."""
+    if not available():
+        return None
+    try:
+        # First round: stream the response
+        raw = _ask_streaming(CHAT_INSTRUCTIONS, context, on_chunk)
+        data = _json_from(raw)
+        # If the model asked for files, do a non-streaming follow-up
+        needed = (data or {}).get("need_files")
+        if needed and read_file:
+            chunks = []
+            for path in list(needed)[:8]:
+                content = read_file(path)
+                chunks.append(f"--- {path} ---\n"
+                              f"{content if content is not None else '(not found)'}")
+            ctx2 = context + "\n\nRequested files:\n" + "\n".join(chunks)[:40000] \
+                   + "\n\nNow reply with the full plan JSON only."
+            raw = _ask_streaming(CHAT_INSTRUCTIONS, ctx2, on_chunk)
+            data = _json_from(raw)
+        return data
     except Exception:
         return None
 

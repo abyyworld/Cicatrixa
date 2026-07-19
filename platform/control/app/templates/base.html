@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Cicatrixa{% endblock %}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='104' fill='%230A0F0C'/%3E%3Cpath d='M150 150 L256 256' stroke='%23FF5257' stroke-width='36' stroke-linecap='round'/%3E%3Cpath d='M256 256 L362 362' stroke='%2340D967' stroke-width='36' stroke-linecap='round'/%3E%3Cg stroke='%23c9d1d9' stroke-width='17' stroke-linecap='round'%3E%3Cpath d='M168 216 L216 168'/%3E%3Cpath d='M211 259 L259 211'/%3E%3Cpath d='M253 301 L301 253'/%3E%3Cpath d='M296 344 L344 296'/%3E%3C/g%3E%3C/svg%3E">
 <style>
   /* Cicatrixa app shell — same dark system as the landing page:
      near-black surface, arterial red / healed green accents, mono UI type. */
@@ -102,7 +103,17 @@
 </head>
 <body>
 <header class="masthead"><div class="wrap nav">
-  <a class="wordmark" href="/"><span class="r">cica</span><span class="g">trixa</span></a>
+  <a class="wordmark" href="/" style="display:flex;align-items:center;gap:9px">
+    <svg width="22" height="22" viewBox="0 0 512 512" aria-hidden="true" style="flex-shrink:0">
+      <rect width="512" height="512" rx="104" fill="#0A0F0C" stroke="#1F2B24" stroke-width="8"/>
+      <path d="M150 150 L256 256" stroke="#FF5257" stroke-width="36" stroke-linecap="round"/>
+      <path d="M256 256 L362 362" stroke="#40D967" stroke-width="36" stroke-linecap="round"/>
+      <g stroke="#c9d1d9" stroke-width="17" stroke-linecap="round">
+        <path d="M168 216 L216 168"/><path d="M211 259 L259 211"/>
+        <path d="M253 301 L301 253"/><path d="M296 344 L344 296"/>
+      </g>
+    </svg>
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
   {% if user %}
     <a class="lnk" href="/dashboard">Dashboard</a>
     <a class="lnk" href="/projects/new">New project</a>

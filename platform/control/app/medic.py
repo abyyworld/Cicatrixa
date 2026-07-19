@@ -3,6 +3,7 @@ the live containers and the code, proposes exact patches, and — once the user 
 commits them to the user's GitHub repository and redeploys."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -116,7 +117,23 @@ def investigate_sync(project_id: int, user_text: str):
     prompt = (f"PROJECT {project['name']} ({len(services)} services)\n\n"
               + "\n".join(sections)[:60000]
               + f"\n\nChat so far:\n{convo}\n\nUser's request:\n{user_text}")
-    result = ai.chat_agent(prompt, read_file)
+
+    # Accumulate streaming tokens and extract the reply text as it comes
+    _stream_buf: list[str] = []
+
+    def _on_chunk(text: str):
+        _stream_buf.append(text)
+        accumulated = "".join(_stream_buf)
+        # Extract just the reply text from the streaming JSON and publish it
+        m = re.search(r'"reply"\s*:\s*"((?:[^"\\]|\\.)*)', accumulated)
+        if m:
+            reply_so_far = m.group(1).replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\")
+            bus.publish(f"project:{project_id}", "stream",
+                        {"text": reply_so_far})
+
+    result = ai.chat_agent_streaming(prompt, _on_chunk, read_file)
+    # Signal end of stream so the browser knows to stop the typing animation
+    bus.publish(f"project:{project_id}", "stream_end", {})
     if not result or not result.get("reply"):
         add_message(project_id, "agent",
                     "I couldn't complete the investigation (AI error). Try again.")

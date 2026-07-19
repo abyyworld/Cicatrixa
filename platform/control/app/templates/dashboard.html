@@ -18,13 +18,52 @@
   </div>
   <span style="margin-left:auto"></span>
   {% if connection %}
-    <form method="post" action="/connect/github/disconnect" style="margin:0">
-      <button class="btn ghost sm">disconnect github</button></form>
+    <button class="btn ghost sm" onclick="showDisconnectModal()" type="button">disconnect github</button>
   {% else %}
     <a class="btn sm" href="/connect/github">connect github</a>
   {% endif %}
   <a class="btn" href="/projects/new">+ new project</a>
 </div>
+
+{% if connection %}
+<!-- Disconnect modal -->
+<div id="dc-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:999;align-items:center;justify-content:center">
+  <div style="background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,.3)">
+    <div style="font-size:17px;font-weight:700;margin-bottom:8px">Disconnect GitHub?</div>
+    <p class="muted" style="font-size:13.5px;margin:0 0 18px">Cicatrixa will stop accessing your repos. Your running services are unaffected.</p>
+    {% if connection.kind == 'app' %}
+    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">GitHub App installation</div>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;margin-bottom:8px">
+        <input type="radio" name="dc_revoke" value="0" checked> Keep the App installed on GitHub &mdash; reconnect later without re-approving repos
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer">
+        <input type="radio" name="dc_revoke" value="1"> Also uninstall from GitHub &mdash; full removal
+      </label>
+    </div>
+    {% endif %}
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('dc-overlay').style.display='none'" type="button">Cancel</button>
+      <button class="btn danger" onclick="submitDisconnect()" type="button">Disconnect</button>
+    </div>
+  </div>
+</div>
+<form id="dc-form" method="post" action="/connect/github/disconnect" style="display:none">
+  <input type="hidden" name="revoke" id="dc-revoke-val" value="0">
+</form>
+<script>
+function showDisconnectModal(){document.getElementById('dc-overlay').style.display='flex';}
+function submitDisconnect(){
+  const v=document.querySelector('input[name=dc_revoke]:checked');
+  document.getElementById('dc-revoke-val').value=v?v.value:'0';
+  document.getElementById('dc-form').submit();
+}
+document.getElementById('dc-overlay').addEventListener('click',e=>{
+  if(e.target===document.getElementById('dc-overlay'))
+    document.getElementById('dc-overlay').style.display='none';
+});
+</script>
+{% endif %}
 
 <div class="card" style="margin-top:22px;display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px">
   {{ meter("services", usage.services, quota.services,
