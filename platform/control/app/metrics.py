@@ -14,6 +14,13 @@ DEFAULT_QUOTA_RAM_MB = int(os.environ.get("DEFAULT_QUOTA_RAM_MB", "2048"))
 DEFAULT_QUOTA_DISK_MB = int(os.environ.get("DEFAULT_QUOTA_DISK_MB", "5120"))
 DEFAULT_QUOTA_DATABASES = int(os.environ.get("DEFAULT_QUOTA_DATABASES", "2"))
 
+# instance-wide ceilings — protect the shared host itself, apply to every
+# account including admins, and are editable from the admin panel (stored in
+# `settings`, these are just the first-boot defaults)
+DEFAULT_GLOBAL_MAX_SERVICES = int(os.environ.get("DEFAULT_GLOBAL_MAX_SERVICES", "40"))
+DEFAULT_GLOBAL_MAX_DATABASES = int(os.environ.get("DEFAULT_GLOBAL_MAX_DATABASES", "10"))
+DEFAULT_GLOBAL_MAX_RAM_MB = int(os.environ.get("DEFAULT_GLOBAL_MAX_RAM_MB", "6144"))
+
 # caches refreshed by collect() from the watchdog loop
 service_mem: dict[str, int] = {}    # service slug -> bytes in use
 service_disk: dict[str, int] = {}   # service slug -> bytes (image + workdir)
@@ -139,10 +146,45 @@ def all_users_usage() -> list[dict]:
     return out
 
 
+# ---------- instance-wide (global) limits ----------
+
+def global_limits() -> dict:
+    return {
+        "services": int(db.setting("global_max_services", DEFAULT_GLOBAL_MAX_SERVICES)),
+        "databases": int(db.setting("global_max_databases", DEFAULT_GLOBAL_MAX_DATABASES)),
+        "ram_mb": int(db.setting("global_max_ram_mb", DEFAULT_GLOBAL_MAX_RAM_MB)),
+    }
+
+
+def set_global_limits(services: int, databases: int, ram_mb: int):
+    db.set_setting("global_max_services", str(services))
+    db.set_setting("global_max_databases", str(databases))
+    db.set_setting("global_max_ram_mb", str(ram_mb))
+
+
+def global_usage() -> dict:
+    services = db.one("SELECT COUNT(*) c FROM services")["c"]
+    databases = db.one("SELECT COUNT(*) c FROM databases")["c"]
+    active_services = db.one(
+        "SELECT COUNT(*) c FROM services WHERE status IN ('live','deploying')")["c"]
+    live_databases = db.one("SELECT COUNT(*) c FROM databases WHERE status='live'")["c"]
+    return {
+        "services": services,
+        "databases": databases,
+        "ram_reserved_mb": active_services * RAM_PER_CONTAINER_MB
+                          + live_databases * dbprovision.RAM_PER_DB_MB,
+    }
+
+
 # ---------- quota enforcement ----------
 
 def check_service_count(user, extra: int = 1) -> str | None:
     """Return an error string if adding `extra` services would exceed the quota."""
+    limits = global_limits()
+    total = db.one("SELECT COUNT(*) c FROM services")["c"]
+    if total + extra > limits["services"]:
+        return (f"Instance-wide service limit reached: {total}/{limits['services']} "
+                f"used across all accounts. Ask an admin to raise the instance limit.")
     if user["is_admin"]:
         return None
     quota = user_quota(user)
@@ -157,6 +199,11 @@ def check_service_count(user, extra: int = 1) -> str | None:
 
 def check_database_count(user, extra: int = 1) -> str | None:
     """Return an error string if adding `extra` databases would exceed the quota."""
+    limits = global_limits()
+    total = db.one("SELECT COUNT(*) c FROM databases")["c"]
+    if total + extra > limits["databases"]:
+        return (f"Instance-wide database limit reached: {total}/{limits['databases']} "
+                f"used across all accounts. Ask an admin to raise the instance limit.")
     if user["is_admin"]:
         return None
     quota = user_quota(user)
@@ -169,7 +216,15 @@ def check_database_count(user, extra: int = 1) -> str | None:
 
 
 def check_deploy_quota(user, service) -> str | None:
-    """RAM + disk gate, called at the start of every deploy."""
+    """RAM + disk gate, called at the start of every deploy. The instance-wide RAM
+    ceiling applies to everyone, admins included — it protects the shared host,
+    not fairness between accounts."""
+    limits = global_limits()
+    usage = global_usage()
+    if usage["ram_reserved_mb"] > limits["ram_mb"]:
+        return (f"Instance-wide RAM limit reached: {usage['ram_reserved_mb']}MB "
+                f"reserved > {limits['ram_mb']}MB. Ask an admin to raise it, or free "
+                f"up capacity by stopping a service.")
     if user["is_admin"]:
         return None
     quota = user_quota(user)

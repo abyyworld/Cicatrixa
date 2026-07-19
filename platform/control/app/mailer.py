@@ -64,6 +64,18 @@ email — nothing happens without the code.</p>""")
                f"Your Cicatrixa verification code is {code}. It expires in 10 minutes.", html)
 
 
+def send_invite(to: str, signup_url: str) -> bool:
+    html = _wrap("you're invited", f"""
+<p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">
+An admin has invited you to Cicatrixa. Click below to create your account — this link
+works once, for this address only.</p>
+<a href="{signup_url}" style="display:inline-block;background:#40D967;color:#06130A;
+text-decoration:none;padding:11px 22px;border-radius:8px;font-size:12.5px;font-weight:600;
+letter-spacing:.04em">Create your account →</a>
+<p style="font-size:12px;color:#74857B;margin-top:20px">Or paste this link:<br>{signup_url}</p>""")
+    return send(to, "You're invited to Cicatrixa", f"Create your account: {signup_url}", html)
+
+
 def send_service_failed(to: str, project_name: str, service_name: str, project_url: str) -> bool:
     html = _wrap("deploy alert", f"""
 <p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">

@@ -11,7 +11,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import ai, auth, bus, db, dbprovision, engine, gh, mailer, medic, metrics, watchdog
+from . import ai, auth, bus, db, dbprovision, engine, gh, invites, mailer, medic, metrics, watchdog
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -94,23 +94,59 @@ async def landing(request: Request):
 
 
 @app.get("/signup", response_class=HTMLResponse)
-async def signup_page(request: Request):
-    return render(request, "signup.html", error=None)
+async def signup_page(request: Request, invite: str = ""):
+    if invites.bootstrap_open():
+        return render(request, "signup.html", error=None, invite_token="", invite_email="")
+    if not invite:
+        return RedirectResponse("/request-access", status_code=303)
+    row = db.one("SELECT * FROM invites WHERE token=?", (invite,))
+    if not row or row["status"] not in ("approved",):
+        return render(request, "signup.html", error="That invite link isn't valid or has "
+                      "already been used.", invite_token="", invite_email="", invalid=True)
+    return render(request, "signup.html", error=None, invite_token=invite,
+                  invite_email=row["email"])
 
 
 @app.post("/signup")
-async def signup(request: Request, email: str = Form(...), password: str = Form(...)):
+async def signup(request: Request, email: str = Form(...), password: str = Form(...),
+                 invite_token: str = Form("")):
     email = email.strip().lower()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return render(request, "signup.html", error="That doesn't look like an email.")
+        return render(request, "signup.html", error="That doesn't look like an email.",
+                      invite_token=invite_token, invite_email="")
     if len(password) < 8:
-        return render(request, "signup.html", error="Password must be at least 8 characters.")
+        return render(request, "signup.html", error="Password must be at least 8 characters.",
+                      invite_token=invite_token, invite_email="")
     if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
-        return render(request, "signup.html", error="An account with that email already exists.")
-    is_admin = 1 if (email in ADMIN_EMAILS or not db.one("SELECT 1 FROM users LIMIT 1")) else 0
+        return render(request, "signup.html", error="An account with that email already exists.",
+                      invite_token=invite_token, invite_email="")
+    is_admin = email in ADMIN_EMAILS or invites.bootstrap_open()
+    if not is_admin:
+        ok, err = invites.resolve(invite_token, email) if invite_token else \
+            (False, "This instance is invite-only — request access below.")
+        if not ok:
+            return render(request, "signup.html", error=err, invite_token=invite_token,
+                          invite_email="")
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,created_at) VALUES(?,?,?,?)",
-               (email, auth.hash_password(password), is_admin, db.now())).lastrowid
+               (email, auth.hash_password(password), 1 if is_admin else 0,
+                db.now())).lastrowid
+    if not is_admin and invite_token:
+        invites.mark_used(invite_token)
     return _start_verification(uid, email)
+
+
+@app.get("/request-access", response_class=HTMLResponse)
+async def request_access_page(request: Request):
+    return render(request, "request_access.html", error=None, sent=False)
+
+
+@app.post("/request-access")
+async def request_access_submit(request: Request, email: str = Form(...)):
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email.strip()):
+        return render(request, "request_access.html", error="That doesn't look like an email.",
+                      sent=False)
+    message = invites.request_access(email)
+    return render(request, "request_access.html", error=None, sent=True, message=message)
 
 
 def _issue_code(user_id: int, email: str) -> bool:
@@ -624,7 +660,12 @@ async def admin_page(request: Request):
                   host=metrics.host, users_usage=metrics.all_users_usage(),
                   defaults={"services": metrics.DEFAULT_QUOTA_SERVICES,
                             "ram_mb": metrics.DEFAULT_QUOTA_RAM_MB,
-                            "disk_mb": metrics.DEFAULT_QUOTA_DISK_MB})
+                            "disk_mb": metrics.DEFAULT_QUOTA_DISK_MB},
+                  global_limits=metrics.global_limits(),
+                  global_usage=metrics.global_usage(),
+                  pending_requests=invites.pending_requests(),
+                  sent_invites=invites.sent_invites(),
+                  error=request.query_params.get("error"))
 
 
 @app.post("/admin/users/{user_id}/quota")
@@ -642,6 +683,57 @@ async def set_quota(request: Request, user_id: int,
     db.q("UPDATE users SET quota_services=?, quota_ram_mb=?, quota_disk_mb=? "
          "WHERE id=?", (parse(quota_services), parse(quota_ram_mb),
                         parse(quota_disk_mb), user_id))
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/limits")
+async def set_global_limits(request: Request, max_services: str = Form(""),
+                            max_databases: str = Form(""), max_ram_mb: str = Form("")):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    current = metrics.global_limits()
+
+    def parse(v: str, fallback: int):
+        v = v.strip()
+        return int(v) if v.isdigit() and int(v) > 0 else fallback
+
+    metrics.set_global_limits(parse(max_services, current["services"]),
+                              parse(max_databases, current["databases"]),
+                              parse(max_ram_mb, current["ram_mb"]))
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/invites/send")
+async def send_invite(request: Request, email: str = Form(...)):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    email = email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return RedirectResponse("/admin?error=Invalid+email", status_code=303)
+    if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
+        return RedirectResponse("/admin?error=That+person+already+has+an+account",
+                                status_code=303)
+    await asyncio.to_thread(invites.send_invite, email, BASE_URL, user["id"])
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/invites/{invite_id}/approve")
+async def approve_invite(request: Request, invite_id: int):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    await asyncio.to_thread(invites.approve, invite_id, BASE_URL, user["id"])
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/invites/{invite_id}/revoke")
+async def revoke_invite(request: Request, invite_id: int):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    invites.revoke(invite_id, user["id"])
     return RedirectResponse("/admin", status_code=303)
 
 

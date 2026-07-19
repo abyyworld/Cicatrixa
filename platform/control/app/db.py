@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     data        TEXT,                          -- JSON: patches, commit_message, service, applied
     created_at  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS invites (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    email        TEXT NOT NULL,
+    token        TEXT UNIQUE NOT NULL,
+    origin       TEXT NOT NULL,               -- requested|admin_sent
+    status       TEXT NOT NULL DEFAULT 'pending', -- pending|approved|used|revoked
+    decided_by   INTEGER REFERENCES users(id),
+    created_at   REAL NOT NULL,
+    decided_at   REAL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT

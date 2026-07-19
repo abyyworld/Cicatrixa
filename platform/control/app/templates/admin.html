@@ -7,6 +7,7 @@
   <h1>Instance <em>admin</em></h1>
   <p class="sub">Base URL: <code>{{ base_url }}</code> · wildcard: <code>*.{{ base_domain }}</code>
     · AI: <code>{{ 'on' if ai_on else 'off — set OPENAI_API_KEY' }}</code></p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
   <div class="card" style="display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px;margin-bottom:14px">
     {% if host.ram_total %}
@@ -16,6 +17,78 @@
     {% if host.disk_total %}
       {{ meter("server disk", fmt_bytes(host.disk_used), fmt_bytes(host.disk_total),
                host.disk_used / host.disk_total * 100) }}
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2 style="margin-top:0">Instance-wide limits</h2>
+    <p class="muted" style="font-size:13px">Applies to <strong>every account, admins
+      included</strong> — protects the shared host regardless of per-user quotas below.</p>
+    <div style="display:flex;gap:34px;flex-wrap:wrap;margin:16px 0 20px">
+      {{ meter("total services", global_usage.services, global_limits.services,
+               (global_usage.services / global_limits.services * 100) if global_limits.services else 0) }}
+      {{ meter("total databases", global_usage.databases, global_limits.databases,
+               (global_usage.databases / global_limits.databases * 100) if global_limits.databases else 0) }}
+      {{ meter("ram reserved", global_usage.ram_reserved_mb ~ "MB", global_limits.ram_mb ~ "MB",
+               (global_usage.ram_reserved_mb / global_limits.ram_mb * 100) if global_limits.ram_mb else 0) }}
+    </div>
+    <form method="post" action="/admin/limits" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <div><label style="margin-top:0">max services</label>
+        <input type="text" name="max_services" value="{{ global_limits.services }}" style="width:90px"></div>
+      <div><label style="margin-top:0">max databases</label>
+        <input type="text" name="max_databases" value="{{ global_limits.databases }}" style="width:90px"></div>
+      <div><label style="margin-top:0">max ram (MB)</label>
+        <input type="text" name="max_ram_mb" value="{{ global_limits.ram_mb }}" style="width:110px"></div>
+      <button class="btn sm">save limits</button>
+    </form>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <h2 style="margin-top:0">Invites</h2>
+    <p class="muted" style="font-size:13px">This instance is invite-only. Send someone an
+      invite directly, or approve a request they submitted themselves.</p>
+    <form method="post" action="/admin/invites/send" style="display:flex;gap:10px;margin-bottom:22px">
+      <input type="email" name="email" placeholder="someone@example.com" required style="max-width:280px">
+      <button class="btn sm">send invite →</button>
+    </form>
+
+    {% if pending_requests %}
+    <p class="mono muted" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">
+      pending requests</p>
+    <table style="margin-bottom:20px">
+      <tr><th>email</th><th>requested</th><th></th></tr>
+      {% for r in pending_requests %}
+      <tr>
+        <td class="mono">{{ r.email }}</td>
+        <td class="mono muted" data-ts="{{ r.created_at }}"></td>
+        <td style="display:flex;gap:6px">
+          <form method="post" action="/admin/invites/{{ r.id }}/approve" style="margin:0">
+            <button class="btn sm">approve</button></form>
+          <form method="post" action="/admin/invites/{{ r.id }}/revoke" style="margin:0">
+            <button class="btn danger sm">reject</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if sent_invites %}
+    <p class="mono muted" style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:8px">
+      sent invites — not yet used</p>
+    <table>
+      <tr><th>email</th><th>sent</th><th></th></tr>
+      {% for i in sent_invites %}
+      <tr>
+        <td class="mono">{{ i.email }}</td>
+        <td class="mono muted" data-ts="{{ i.created_at }}"></td>
+        <td><form method="post" action="/admin/invites/{{ i.id }}/revoke" style="margin:0">
+          <button class="btn danger sm">revoke</button></form></td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% if not pending_requests and not sent_invites %}
+    <p class="muted mono" style="font-size:12.5px">No pending requests or unused invites.</p>
     {% endif %}
   </div>
 
@@ -79,6 +152,8 @@
   </div>
 </div>
 <script>
+for (const td of document.querySelectorAll('[data-ts]'))
+  td.textContent = new Date(parseFloat(td.dataset.ts) * 1000).toLocaleString();
 document.getElementById('manifest').value = {{ manifest_json | tojson }};
 (function(){
   var f = document.getElementById('ghform'), o = document.getElementById('ghorg');

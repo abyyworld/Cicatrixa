@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Request access — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:420px;margin:60px auto">
+  <div class="lbl-caps">invite only</div>
+  <h1>Request <em>access</em></h1>
+  <p class="sub">This instance is invite-only right now. Leave your email and an admin
+    will review it — you'll get a signup link if approved.</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if sent %}
+  <div class="card" style="border-color:var(--healed-dim)">
+    <span class="mono" style="color:var(--healed);font-size:13.5px">✔ {{ message }}</span>
+  </div>
+  {% else %}
+  <form method="post" action="/request-access" class="card">
+    <label>email</label>
+    <input type="email" name="email" required autofocus>
+    <div style="margin-top:20px"><button class="btn" style="width:100%">Request access →</button></div>
+  </form>
+  {% endif %}
+  <p class="muted mono" style="font-size:13px;margin-top:16px">
+    Already have an invite link? <a href="/login">Log in</a></p>
+</div>
+{% endblock %}
