@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS deployments (
     created_at  REAL NOT NULL,
     finished_at REAL
 );
+CREATE TABLE IF NOT EXISTS databases (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id    INTEGER NOT NULL REFERENCES projects(id),
+    name          TEXT NOT NULL,
+    slug          TEXT UNIQUE NOT NULL,
+    engine        TEXT NOT NULL DEFAULT 'postgres16',
+    db_name       TEXT NOT NULL,
+    db_user       TEXT NOT NULL,
+    db_password   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'new',
+    container     TEXT,
+    created_at    REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS chat_messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id  INTEGER NOT NULL REFERENCES projects(id),

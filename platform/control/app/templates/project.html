@@ -76,6 +76,38 @@
   </form>
 </details>
 
+<h2>Databases <span class="lbl-caps" style="margin-left:10px">postgres 16 · wired in as DATABASE_URL</span></h2>
+<div class="grid">
+{% for d in databases %}
+  <div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:16px 20px">
+    <div style="min-width:170px">
+      <div style="font-weight:600">{{ d.name }}</div>
+      <div class="mono muted" style="font-size:12px">postgres 16 · internal host {{ d.slug }}:5432</div>
+    </div>
+    <code style="font-size:11.5px;max-width:420px;overflow-x:auto;white-space:nowrap">{{ connection_url(d) }}</code>
+    <span style="margin-left:auto"></span>
+    <span class="pill {{ d.status }}">{{ d.status }}</span>
+    <form method="post" action="/databases/{{ d.id }}/restart" style="margin:0">
+      <button class="btn ghost sm">restart</button></form>
+    <form method="post" action="/databases/{{ d.id }}/delete" style="margin:0"
+          onsubmit="return confirm('Delete database {{ d.name }}? This destroys its data permanently.')">
+      <button class="btn danger sm">delete</button></form>
+  </div>
+{% endfor %}
+{% if not databases %}
+  <div class="card muted" style="font-size:13px">No databases yet — every service in this
+    project gets <code>DATABASE_URL</code> automatically once you add one.</div>
+{% endif %}
+</div>
+<details style="margin-top:14px">
+  <summary class="mono muted" style="font-size:13px;cursor:pointer">+ add a postgres database</summary>
+  <form method="post" action="/projects/{{ project.id }}/databases" class="card" style="margin-top:10px">
+    <label>name <span style="text-transform:none">(becomes the env var prefix, e.g. PRIMARY_DATABASE_URL)</span></label>
+    <input type="text" name="name" placeholder="primary" value="primary">
+    <div style="margin-top:14px"><button class="btn sm">Create database →</button></div>
+  </form>
+</details>
+
 <h2>Consult <span class="lbl-caps" style="margin-left:10px">describe a problem — the AI investigates, fixes, pushes to GitHub, redeploys</span></h2>
 <div class="card" style="padding:0">
   <div id="chatlog" style="max-height:440px;overflow-y:auto;padding:16px 20px">

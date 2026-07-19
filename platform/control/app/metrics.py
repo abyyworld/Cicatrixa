@@ -6,12 +6,13 @@ cache; pages and quota checks read the cache so they stay instant.
 import os
 import time
 
-from . import db, engine
+from . import db, dbprovision, engine
 
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
 DEFAULT_QUOTA_SERVICES = int(os.environ.get("DEFAULT_QUOTA_SERVICES", "5"))
 DEFAULT_QUOTA_RAM_MB = int(os.environ.get("DEFAULT_QUOTA_RAM_MB", "2048"))
 DEFAULT_QUOTA_DISK_MB = int(os.environ.get("DEFAULT_QUOTA_DISK_MB", "5120"))
+DEFAULT_QUOTA_DATABASES = int(os.environ.get("DEFAULT_QUOTA_DATABASES", "2"))
 
 # caches refreshed by collect() from the watchdog loop
 service_mem: dict[str, int] = {}    # service slug -> bytes in use
@@ -25,6 +26,7 @@ def user_quota(user) -> dict:
         "services": user["quota_services"] or DEFAULT_QUOTA_SERVICES,
         "ram_mb": user["quota_ram_mb"] or DEFAULT_QUOTA_RAM_MB,
         "disk_mb": user["quota_disk_mb"] or DEFAULT_QUOTA_DISK_MB,
+        "databases": DEFAULT_QUOTA_DATABASES,
     }
 
 
@@ -46,10 +48,12 @@ def collect():
     try:
         containers = engine.dock().containers.list(
             filters={"label": "cx.service", "status": "running"})
+        containers += engine.dock().containers.list(
+            filters={"label": "cx.database", "status": "running"})
     except Exception:
         containers = []
     for c in containers:
-        slug = c.labels.get("cx.service", "")
+        slug = c.labels.get("cx.service") or c.labels.get("cx.database", "")
         try:
             s = c.stats(stream=False)
             usage = s["memory_stats"].get("usage", 0)
@@ -57,6 +61,8 @@ def collect():
             mem[slug] = max(usage, 0)
         except Exception:
             pass
+    for d in db.all_("SELECT * FROM databases WHERE status='live'"):
+        disk[d["slug"]] = dbprovision.disk_bytes(d)
     for s in db.all_("SELECT slug FROM services"):
         slug = s["slug"]
         size = 0
@@ -110,12 +116,18 @@ def user_usage(user_id: int) -> dict:
     rows = db.all_("SELECT s.slug, s.status FROM services s "
                    "JOIN projects p ON p.id=s.project_id WHERE p.user_id=?",
                    (user_id,))
+    dbs = db.all_("SELECT d.slug, d.status FROM databases d "
+                  "JOIN projects p ON p.id=d.project_id WHERE p.user_id=?", (user_id,))
     running = [r["slug"] for r in rows if r["status"] in ("live", "deploying")]
+    db_running = [d["slug"] for d in dbs if d["status"] == "live"]
     return {
         "services": len(rows),
-        "ram_bytes": sum(service_mem.get(slug, 0) for slug in running),
-        "ram_reserved_mb": len(running) * RAM_PER_CONTAINER_MB,
-        "disk_bytes": sum(service_disk.get(r["slug"], 0) for r in rows),
+        "databases": len(dbs),
+        "ram_bytes": sum(service_mem.get(slug, 0) for slug in running + db_running),
+        "ram_reserved_mb": len(running) * RAM_PER_CONTAINER_MB
+                          + len(db_running) * dbprovision.RAM_PER_DB_MB,
+        "disk_bytes": (sum(service_disk.get(r["slug"], 0) for r in rows)
+                      + sum(service_disk.get(d["slug"], 0) for d in dbs)),
     }
 
 
@@ -131,6 +143,8 @@ def all_users_usage() -> list[dict]:
 
 def check_service_count(user, extra: int = 1) -> str | None:
     """Return an error string if adding `extra` services would exceed the quota."""
+    if user["is_admin"]:
+        return None
     quota = user_quota(user)
     current = db.one("SELECT COUNT(*) c FROM services s JOIN projects p "
                      "ON p.id=s.project_id WHERE p.user_id=?", (user["id"],))["c"]
@@ -141,8 +155,23 @@ def check_service_count(user, extra: int = 1) -> str | None:
     return None
 
 
+def check_database_count(user, extra: int = 1) -> str | None:
+    """Return an error string if adding `extra` databases would exceed the quota."""
+    if user["is_admin"]:
+        return None
+    quota = user_quota(user)
+    current = db.one("SELECT COUNT(*) c FROM databases d JOIN projects p "
+                     "ON p.id=d.project_id WHERE p.user_id=?", (user["id"],))["c"]
+    if current + extra > quota["databases"]:
+        return (f"Database limit reached: {current}/{quota['databases']} used. "
+                f"Remove a database or ask the admin to raise your quota.")
+    return None
+
+
 def check_deploy_quota(user, service) -> str | None:
     """RAM + disk gate, called at the start of every deploy."""
+    if user["is_admin"]:
+        return None
     quota = user_quota(user)
     active = db.one(
         "SELECT COUNT(*) c FROM services s JOIN projects p ON p.id=s.project_id "

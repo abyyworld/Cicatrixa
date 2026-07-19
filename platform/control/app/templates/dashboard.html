@@ -29,6 +29,8 @@
 <div class="card" style="margin-top:22px;display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px">
   {{ meter("services", usage.services, quota.services,
            (usage.services / quota.services * 100) if quota.services else 0) }}
+  {{ meter("databases", usage.databases, quota.databases,
+           (usage.databases / quota.databases * 100) if quota.databases else 0) }}
   {{ meter("ram (reserved)", usage.ram_reserved_mb ~ "MB", quota.ram_mb ~ "MB",
            (usage.ram_reserved_mb / quota.ram_mb * 100) if quota.ram_mb else 0) }}
   {{ meter("ram (in use)", fmt_bytes(usage.ram_bytes), quota.ram_mb ~ "MB",

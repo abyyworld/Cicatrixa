@@ -11,7 +11,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import ai, auth, bus, db, engine, gh, mailer, medic, metrics, watchdog
+from . import ai, auth, bus, db, dbprovision, engine, gh, mailer, medic, metrics, watchdog
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -318,6 +318,9 @@ async def project_page(request: Request, project_id: int):
         return RedirectResponse("/dashboard", status_code=303)
     services = db.all_("SELECT * FROM services WHERE project_id=? ORDER BY id",
                        (project_id,))
+    databases = db.all_("SELECT * FROM databases WHERE project_id=? ORDER BY id",
+                        (project_id,))
+    await asyncio.to_thread(metrics.ensure_fresh)
     deployments = db.all_(
         "SELECT d.id,d.sha,d.trigger,d.status,d.created_at,s.name AS service_name "
         "FROM deployments d JOIN services s ON s.id=d.service_id "
@@ -326,10 +329,11 @@ async def project_page(request: Request, project_id: int):
         "SELECT d.log FROM deployments d JOIN services s ON s.id=d.service_id "
         "WHERE s.project_id=? ORDER BY d.id DESC", (project_id,))
     return render(request, "project.html", user=user, project=project,
-                  services=services, deployments=deployments,
+                  services=services, databases=databases, deployments=deployments,
                   latest_log=(latest["log"] if latest else ""),
                   service_url=engine.service_url,
                   service_mem=metrics.service_mem, service_disk=metrics.service_disk,
+                  connection_url=dbprovision.connection_url,
                   chat=medic.history(project_id),
                   error=request.query_params.get("error"))
 
@@ -415,6 +419,48 @@ async def add_service(request: Request, project_id: int, repo: str = Form(...),
                              branch.strip(), primary=False)
     asyncio.create_task(engine.deploy(sid, "manual"))
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@app.post("/projects/{project_id}/databases")
+async def add_database(request: Request, project_id: int, name: str = Form("primary")):
+    user, project = own_project(request, project_id)
+    if not project:
+        return need_login(request)
+    quota_err = metrics.check_database_count(user, extra=1)
+    if quota_err:
+        return RedirectResponse(f"/projects/{project_id}?error="
+                                + quota_err.replace(" ", "+"), status_code=303)
+    name = re.sub(r"[^a-zA-Z0-9_-]+", "", name.strip()) or "primary"
+    await asyncio.to_thread(dbprovision.create, project, name)
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+def _own_database(request: Request, database_id: int):
+    user = current_user(request)
+    if not user:
+        return None, None
+    database = db.one(
+        "SELECT d.* FROM databases d JOIN projects p ON p.id=d.project_id "
+        "WHERE d.id=? AND p.user_id=?", (database_id, user["id"]))
+    return user, database
+
+
+@app.post("/databases/{database_id}/restart")
+async def restart_database(request: Request, database_id: int):
+    user, database = _own_database(request, database_id)
+    if not database:
+        return need_login(request)
+    await asyncio.to_thread(dbprovision.restart, database_id)
+    return RedirectResponse(f"/projects/{database['project_id']}", status_code=303)
+
+
+@app.post("/databases/{database_id}/delete")
+async def delete_database(request: Request, database_id: int):
+    user, database = _own_database(request, database_id)
+    if not database:
+        return need_login(request)
+    await asyncio.to_thread(dbprovision.delete, database_id)
+    return RedirectResponse(f"/projects/{database['project_id']}", status_code=303)
 
 
 @app.post("/projects/{project_id}/stop")

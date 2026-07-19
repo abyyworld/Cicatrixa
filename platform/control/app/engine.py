@@ -388,8 +388,10 @@ def _sibling_env(service) -> dict:
 
 
 def _run_container(service, image: str, port: int, name: str, plan: dict | None = None):
+    from . import dbprovision  # late import: dbprovision imports this module
     env = {"PORT": str(port), "HOST": "0.0.0.0",
-           "PUBLIC_URL": service_url(service["slug"]), **_sibling_env(service)}
+           "PUBLIC_URL": service_url(service["slug"]), **_sibling_env(service),
+           **dbprovision.sibling_env(service["project_id"])}
     client = dock()
     container = client.containers.create(
         image, name=name, labels=_labels(service, port, plan),
@@ -546,26 +548,33 @@ URL_WHITELIST = ("w3.org", "youtube", "youtu.be", "vimeo", "plyr", "googleapis",
                  "fb.me", "ytimg.com", "aniview")
 
 
+def _foreign_urls(text: str) -> set[str]:
+    found: set[str] = set()
+    for url in re.findall(r'https?://[A-Za-z0-9.\-]+(?::\d+)?', text):
+        host = url.split("//", 1)[1]
+        if BASE_DOMAIN in host or any(w in host for w in URL_WHITELIST):
+            continue
+        if host in ("localhost", "127.0.0.1"):
+            continue  # bare localhost strings are dev-mode noise; ports are real
+        found.add(url)
+    return found
+
+
 def _bundle_urls(container_name: str, port: int, log) -> list[str]:
-    """Fetch the frontend's built JS from the container and list foreign API URLs."""
+    """Fetch the frontend's served HTML (and any external JS it loads) and list
+    foreign API URLs — whether they live in an external bundle or inline <script>."""
     try:
         index = httpx.get(f"http://{container_name}:{port}/", timeout=8).text
     except Exception:
         return []
+    found = _foreign_urls(index)  # catches inline <script> blocks, plain static sites
     scripts = re.findall(r'src="(/[^"]+\.m?js[^"]*)"', index)[:3]
-    found: set[str] = set()
     for src in scripts:
         try:
             js = httpx.get(f"http://{container_name}:{port}{src}", timeout=10).text
         except Exception:
             continue
-        for url in re.findall(r'https?://[A-Za-z0-9.\-]+(?::\d+)?', js):
-            host = url.split("//", 1)[1]
-            if BASE_DOMAIN in host or any(w in host for w in URL_WHITELIST):
-                continue
-            if host == "localhost" or host == "127.0.0.1":
-                continue  # bare localhost strings are dev-mode noise; ports are real
-            found.add(url)
+        found |= _foreign_urls(js)
     return sorted(found)[:5]
 
 
@@ -684,8 +693,11 @@ def stop_project(project):
 
 
 def delete_project(project):
+    from . import dbprovision
     for s in db.all_("SELECT * FROM services WHERE project_id=?", (project["id"],)):
         delete_service(s)
+    for d in db.all_("SELECT id FROM databases WHERE project_id=?", (project["id"],)):
+        dbprovision.delete(d["id"])
     db.q("DELETE FROM chat_messages WHERE project_id=?", (project["id"],))
     db.q("DELETE FROM projects WHERE id=?", (project["id"],))
 

@@ -2,7 +2,7 @@
 import asyncio
 import os
 
-from . import bus, db, engine, gh, metrics
+from . import bus, db, dbprovision, engine, gh, metrics
 
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "180"))
 HEALTH_INTERVAL = int(os.environ.get("HEALTH_INTERVAL", "60"))
@@ -11,7 +11,7 @@ _restart_strikes: dict[int, int] = {}
 
 
 async def run_forever():
-    await asyncio.gather(_poll_loop(), _health_loop(), _metrics_loop())
+    await asyncio.gather(_poll_loop(), _health_loop(), _metrics_loop(), _db_health_loop())
 
 
 async def _metrics_loop():
@@ -93,6 +93,35 @@ def _check_health_sync():
             project = db.one("SELECT * FROM projects WHERE id=?", (s["project_id"],))
             if project:
                 engine._notify_failure(project, s)
+
+
+# ---- watchdog 3: database container health ----
+
+async def _db_health_loop():
+    while True:
+        try:
+            await asyncio.to_thread(_check_db_health_sync)
+        except Exception:
+            pass
+        await asyncio.sleep(HEALTH_INTERVAL)
+
+
+def _check_db_health_sync():
+    for d in db.all_("SELECT * FROM databases WHERE status='live' AND container IS NOT NULL"):
+        chan = f"project:{d['project_id']}"
+        try:
+            c = engine.dock().containers.get(d["container"])
+            if c.status == "running":
+                continue
+            bus.publish(chan, "log",
+                        {"line": f"⚠ watchdog: db:{d['name']} container {c.status} — "
+                                 f"restarting (data is safe, it lives in the volume)"})
+            c.restart(timeout=10)
+        except Exception:
+            bus.publish(chan, "log",
+                        {"line": f"✖ watchdog: db:{d['name']} container vanished — "
+                                 f"recreating from its volume"})
+            dbprovision.restart(d["id"])
 
 
 _main_loop: asyncio.AbstractEventLoop | None = None

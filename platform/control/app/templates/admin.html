@@ -25,11 +25,12 @@
       {{ defaults.ram_mb }}MB RAM · {{ defaults.disk_mb }}MB storage. Blank field = use default.
       Each container is hard-capped at {{ ram_per_container }}MB RAM by the runtime.</p>
     <table>
-      <tr><th>user</th><th>services</th><th>ram in use</th><th>storage</th><th>quotas (svc / ram MB / disk MB)</th></tr>
+      <tr><th>user</th><th>services</th><th>databases</th><th>ram in use</th><th>storage</th><th>quotas (svc / ram MB / disk MB)</th></tr>
       {% for row in users_usage %}
       <tr>
         <td class="mono" style="font-size:12.5px">{{ row.user.email }}{% if row.user.is_admin %} ★{% endif %}</td>
         <td class="mono">{{ row.usage.services }}/{{ row.quota.services }}</td>
+        <td class="mono">{{ row.usage.databases }}/{{ row.quota.databases }}</td>
         <td class="mono">{{ fmt_bytes(row.usage.ram_bytes) }} <span class="muted">({{ row.usage.ram_reserved_mb }}MB rsvd)</span></td>
         <td class="mono">{{ fmt_bytes(row.usage.disk_bytes) }}/{{ row.quota.disk_mb }}MB</td>
         <td>
