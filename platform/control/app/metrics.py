@@ -28,12 +28,32 @@ host: dict = {}                     # host totals
 _last_collect = 0.0
 
 
-def user_quota(user) -> dict:
+def universal_quota() -> dict:
+    """The default quota applied to any account without an individual override —
+    editable live from the admin panel (settings table), env vars are just the
+    first-boot values before an admin ever changes them."""
     return {
-        "services": user["quota_services"] or DEFAULT_QUOTA_SERVICES,
-        "ram_mb": user["quota_ram_mb"] or DEFAULT_QUOTA_RAM_MB,
-        "disk_mb": user["quota_disk_mb"] or DEFAULT_QUOTA_DISK_MB,
-        "databases": DEFAULT_QUOTA_DATABASES,
+        "services": int(db.setting("universal_quota_services", DEFAULT_QUOTA_SERVICES)),
+        "ram_mb": int(db.setting("universal_quota_ram_mb", DEFAULT_QUOTA_RAM_MB)),
+        "disk_mb": int(db.setting("universal_quota_disk_mb", DEFAULT_QUOTA_DISK_MB)),
+        "databases": int(db.setting("universal_quota_databases", DEFAULT_QUOTA_DATABASES)),
+    }
+
+
+def set_universal_quota(services: int, ram_mb: int, disk_mb: int, databases: int):
+    db.set_setting("universal_quota_services", str(services))
+    db.set_setting("universal_quota_ram_mb", str(ram_mb))
+    db.set_setting("universal_quota_disk_mb", str(disk_mb))
+    db.set_setting("universal_quota_databases", str(databases))
+
+
+def user_quota(user) -> dict:
+    d = universal_quota()
+    return {
+        "services": user["quota_services"] or d["services"],
+        "ram_mb": user["quota_ram_mb"] or d["ram_mb"],
+        "disk_mb": user["quota_disk_mb"] or d["disk_mb"],
+        "databases": d["databases"],
     }
 
 

@@ -92,11 +92,29 @@
     {% endif %}
   </div>
 
+  <div class="card" style="margin-bottom:14px">
+    <h2 style="margin-top:0">Universal quota</h2>
+    <p class="muted" style="font-size:13px">Applies to <strong>every account that doesn't
+      have an individual override</strong> in the table below — change it here instead of
+      redeploying. Each container is separately hard-capped at {{ ram_per_container }}MB
+      RAM by the runtime regardless of quota.</p>
+    <form method="post" action="/admin/universal-quota" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+      <div><label style="margin-top:0">services</label>
+        <input type="text" name="services" value="{{ defaults.services }}" style="width:80px"></div>
+      <div><label style="margin-top:0">ram (MB)</label>
+        <input type="text" name="ram_mb" value="{{ defaults.ram_mb }}" style="width:90px"></div>
+      <div><label style="margin-top:0">storage (MB)</label>
+        <input type="text" name="disk_mb" value="{{ defaults.disk_mb }}" style="width:90px"></div>
+      <div><label style="margin-top:0">databases</label>
+        <input type="text" name="databases" value="{{ defaults.databases }}" style="width:80px"></div>
+      <button class="btn sm">save universal quota</button>
+    </form>
+  </div>
+
   <div class="card" style="margin-bottom:14px;overflow-x:auto">
     <h2 style="margin-top:0">Users &amp; quotas</h2>
-    <p class="muted" style="font-size:13px">Defaults: {{ defaults.services }} services ·
-      {{ defaults.ram_mb }}MB RAM · {{ defaults.disk_mb }}MB storage. Blank field = use default.
-      Each container is hard-capped at {{ ram_per_container }}MB RAM by the runtime.</p>
+    <p class="muted" style="font-size:13px">Per-account overrides — blank field falls back
+      to the universal quota above.</p>
     <table>
       <tr><th>user</th><th>services</th><th>databases</th><th>ram in use</th><th>storage</th><th>quotas (svc / ram MB / disk MB)</th></tr>
       {% for row in users_usage %}

@@ -658,9 +658,7 @@ async def admin_page(request: Request):
     return render(request, "admin.html", user=user,
                   manifest_json=json.dumps(manifest, indent=2), base_url=BASE_URL,
                   host=metrics.host, users_usage=metrics.all_users_usage(),
-                  defaults={"services": metrics.DEFAULT_QUOTA_SERVICES,
-                            "ram_mb": metrics.DEFAULT_QUOTA_RAM_MB,
-                            "disk_mb": metrics.DEFAULT_QUOTA_DISK_MB},
+                  defaults=metrics.universal_quota(),
                   global_limits=metrics.global_limits(),
                   global_usage=metrics.global_usage(),
                   pending_requests=invites.pending_requests(),
@@ -701,6 +699,26 @@ async def set_global_limits(request: Request, max_services: str = Form(""),
     metrics.set_global_limits(parse(max_services, current["services"]),
                               parse(max_databases, current["databases"]),
                               parse(max_ram_mb, current["ram_mb"]))
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/universal-quota")
+async def set_universal_quota(request: Request, services: str = Form(""),
+                              ram_mb: str = Form(""), disk_mb: str = Form(""),
+                              databases: str = Form("")):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    current = metrics.universal_quota()
+
+    def parse(v: str, fallback: int):
+        v = v.strip()
+        return int(v) if v.isdigit() and int(v) > 0 else fallback
+
+    metrics.set_universal_quota(parse(services, current["services"]),
+                                parse(ram_mb, current["ram_mb"]),
+                                parse(disk_mb, current["disk_mb"]),
+                                parse(databases, current["databases"]))
     return RedirectResponse("/admin", status_code=303)
 
 
