@@ -138,19 +138,52 @@ def investigate_sync(project_id: int, user_text: str):
         add_message(project_id, "agent",
                     "I couldn't complete the investigation (AI error). Try again.")
         return
-    patches = [p for p in (result.get("patches") or [])
-               if isinstance(p, dict) and p.get("file") and p.get("find") is not None]
+    raw_patches = [p for p in (result.get("patches") or [])
+                  if isinstance(p, dict) and p.get("file") and p.get("find") is not None]
     svc_name = result.get("service")
     service = next((s for s in services if s["name"] == svc_name), None)
+    patches = _verify_patches(raw_patches, service, workdirs) if service else []
+    reply = result["reply"]
+    if raw_patches and not patches:
+        # the AI proposed a fix, but every "find" string mismatched the real file —
+        # never show an Apply button that's guaranteed to no-op on click
+        reply += ("\n\n(A fix was drafted, but it didn't match the file precisely enough "
+                 "to apply safely — try asking again, maybe with more specific detail.)")
     if patches and service:
-        add_message(project_id, "agent", result["reply"], kind="fix",
+        add_message(project_id, "agent", reply, kind="fix",
                     data={"service": service["name"], "service_id": service["id"],
                           "patches": patches[:8],
                           "commit_message": result.get("commit_message")
                           or f"Cicatrixa: fix for {service['name']}",
                           "applied": False})
     else:
-        add_message(project_id, "agent", result["reply"])
+        add_message(project_id, "agent", reply)
+
+
+def _verify_patches(patches: list[dict], service, workdirs: dict) -> list[dict]:
+    """Drop any patch whose 'find' text doesn't actually occur in the file, so the
+    chat never offers an Apply button that's guaranteed to no-op at apply time."""
+    workdir = workdirs.get(service["name"])
+    if workdir is None and len(workdirs) == 1:
+        workdir = next(iter(workdirs.values()))
+    if not workdir:
+        return []
+    verified = []
+    for patch in patches:
+        rel = patch["file"].lstrip("/")
+        for pre in (f"{service['name']}/", f"{service['slug']}/"):
+            if rel.startswith(pre):
+                rel = rel[len(pre):]
+        full = os.path.realpath(os.path.join(workdir, rel))
+        if not full.startswith(os.path.realpath(workdir) + os.sep):
+            continue
+        try:
+            src = open(full, errors="replace").read()
+        except OSError:
+            continue
+        if patch["find"] in src:
+            verified.append(patch)
+    return verified
 
 
 # ---------- apply: patch -> verify build -> commit -> push -> redeploy ----------
