@@ -5,6 +5,8 @@ import re
 import secrets
 import time
 
+import docker.errors
+
 from . import bus, db, engine
 
 POSTGRES_IMAGE = "postgres:16-alpine"
@@ -50,6 +52,11 @@ def _start(database_id: int):
     _log(project["id"], row["name"], f"provisioning postgres 16 ({slug})…")
     try:
         client = engine.dock()
+        try:
+            client.images.get(POSTGRES_IMAGE)
+        except docker.errors.ImageNotFound:
+            _log(project["id"], row["name"], f"pulling {POSTGRES_IMAGE}…")
+            client.images.pull(POSTGRES_IMAGE)
         for old in client.containers.list(all=True, filters={"label": f"cx.database={slug}"}):
             old.remove(force=True)
         volume = f"cxdb-{slug}"
