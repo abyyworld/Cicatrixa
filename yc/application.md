@@ -1,162 +1,160 @@
-# YC Application — Working Draft
+# YC Application — Fall 2026 (FINAL DRAFT)
 
-Name: **Cicatrixa** (from *cicatrix* — the scar left after a wound heals; the
-product leaves a permanent regression test behind after every fix). Domain
-secured: cicatrixa.com. GitHub org: Cicatrixa.
+Company: **Cicatrixa** (from *cicatrix* — the scar left after a wound heals).
+Live at **https://cicatrixa.com** · GitHub org: Cicatrixa · Domain + brand secured.
 
-> ⚠️ Timing: YC now runs four batches a year. It's mid-July 2026 — check
-> ycombinator.com/apply TODAY for the next deadline (Fall '26 applications
-> historically close in early August). You may have ~2–3 weeks, which changes
-> the checklist below from "nice pace" to "sprint."
+> ⏰ Deadline: **July 27, 2026, 8pm PT** (decision by Aug 28). Submit by July 26.
+> Batch runs Oct–Dec in San Francisco.
 
 ---
 
-## The one-liner (≤ 50 chars)
+## One-liner (≤ 50 chars)
 
-**"AI SRE that proves the fix before shipping it."** (46 chars)
+**"Hosting where apps fix themselves."** (34 chars)
 
 Backups:
-- "Fixes production bugs with tests, not guesses."
-- "Self-healing infrastructure for production apps."
+- "Self-healing app hosting for $3/month." (38)
+- "The $3 host with an SRE that never sleeps." (42)
 
-## What does your company do? (long answer)
+## What does your company do?
 
-When production breaks at 3am, an engineer gets paged, reads logs, reproduces the
-bug, writes a fix, waits for CI, and ships — a 2–6 hour loop that burns your best
-people. Cicatrixa closes that loop autonomously: it watches your logs and health
-checks, diagnoses the root cause from your source code, and — this is the part
-nobody else does — **writes a failing test that reproduces the bug in a sandbox
-before it writes a single line of fix**. Only when that test exists does it patch,
-and it iterates until the reproduction test passes and your entire existing suite
-stays green. Then it ships through a real canary deploy (a slice of live traffic,
-auto-promote or auto-rollback) and leaves the regression test in your repo forever.
+Cicatrixa is a hosting platform where deployed apps heal themselves. Point it at
+a GitHub repo — no Dockerfile, no config — and the AI works out how to build it,
+wires a subdomain with HTTPS, and verifies the deploy actually serves before
+calling it live. Then it stays on call: every push redeploys, a watchdog restarts
+crashed containers within a minute, and when the crash is a real code bug, an AI
+medic reads the live container logs and source, writes the fix, verifies the
+patched build, commits it to GitHub, and redeploys — the owner finds a commit,
+not a page.
 
-Every other "AI fixes your bug" tool patches from a stack trace and hopes. A stack
-trace tells you where the code died, not what correct behavior is. A failing test
-is the only machine-checkable definition of a bug — it converts LLM guessing into
-verifiable engineering. That invariant ("no repro, no patch") is our moat-in-miniature
-and our brand.
+It costs $2.99/month for 0.25 vCPU, 1 GB RAM, and 5 GB storage — subdomain,
+HTTPS, one-click Postgres, and the medic included. That's cheaper than Heroku's
+cheapest dyno, for a host that doesn't just run your app but keeps it alive.
+
+## The pitch in one paragraph
+
+Every indie developer and small team has the same story: the side project or
+client app that went down on a weekend and stayed down until someone noticed.
+Big companies solve this with on-call rotations; everyone else just has downtime.
+We sell the thing only big companies had — an SRE watching production — as a
+$2.99 line item on a hosting bill. The hosting is the distribution: because the
+apps run on us, we already have the logs, the source, the build pipeline, and
+the deploy rails, so "AI that fixes your app" needs zero integration work from
+the user. Competitors selling AI debugging as a separate tool have to beg for
+that access; we have it the moment you deploy.
 
 ## Why now
 
-- Incident response is the last unautomated stage of the DevOps pipeline: CI/CD
-  automated shipping, observability automated *seeing*, nothing automated *fixing*.
-- Frontier reasoning models crossed the threshold where they can reliably write a
-  targeted failing test from a traceback + source — that wasn't true 18 months ago.
-- On-call burnout is a top-3 attrition driver for infra teams; downtime costs are
-  board-visible. Buyers already pay for Datadog/PagerDuty/Sentry — we sit on top
-  of that spend and close the loop they open.
+- Frontier models crossed the threshold where they can reliably go from a
+  traceback + source to a *correct, verified* patch — that wasn't true 18 months ago.
+- The indie/solo-builder population is exploding (AI codegen means far more
+  deployed apps per developer), and none of those apps have anyone on call.
+- The cheap-PaaS tier is stagnant: Heroku Eco $5, Render $7, Railway ~$5 — all
+  of them page *you* when your app dies. Nobody competes on what happens after
+  the crash.
 
 ## "Why not just ask a strong model?" — the objection to nail
 
-Every reviewer will think it: engineers already have Claude/GPT in their terminal;
-why pay for another debugging app? The answer, which should appear near-verbatim
-in the application and on the landing page:
+A strong model is not on call. Between "a model that can debug" and "a platform
+that heals itself" sits everything that isn't intelligence:
 
-**A strong model is not on call.** Between "a model that can debug" and "a
-production system that heals itself" sits everything that isn't intelligence:
+1. **Nobody asks at 3am.** The crash has to be noticed and acted on while the
+   human is asleep. A chat window has no pager. Our watchdog does.
+2. **Context assembly is the hard 80%.** The model needs the live container
+   logs, the right slice of source, the deploy history, and a place to build.
+   Because we're the host, we have all of it already — no agent to install,
+   no permissions dance.
+3. **Verification is enforced by the harness, not the prompt.** The medic's
+   patch must match the real file verbatim, build cleanly, and pass the smoke
+   test before the fix is ever offered or shipped. A hallucinated patch can't
+   reach production.
+4. **Deploy rails.** A model can't rebuild a container, swap traffic, and roll
+   back. We own the last mile, which is where the actual risk lives.
 
-1. **Nobody asks at 3am.** The incident has to be *noticed*, triaged against noise,
-   and acted on while the human is asleep. A chat window has no pager.
-2. **Context assembly is the hard 80%.** The model needs the traceback, the right
-   slice of source, recent deploys, and a place to run code. Engineers do this by
-   hand every time; we do it automatically every time.
-3. **A sandbox with a burden of proof.** Ad-hoc model use produces a plausible
-   patch. Our pipeline cannot ship anything that lacks a previously-failing,
-   now-passing test plus a green suite. The invariant is enforced by the harness,
-   not by prompt discipline.
-4. **Deploy rails.** A model can't canary itself onto 20% of traffic and roll
-   itself back. We own the last mile, which is where the actual risk lives.
-
-The intelligence is a commodity component we buy; the product is the closed loop
-around it. Nobody says "why do you need CI, you can run tests by hand" — we are
-CI for incident response.
+The intelligence is a commodity we buy; the product is the closed loop around
+it — plus the hosting margin that pays for it.
 
 ## Competitors & the edge
 
-Resolve.ai, Cleric, Traversal (AI SRE copilots — investigate and *explain*, a
-human still writes and ships the fix); Sentry Seer / GitHub Copilot autofix
-(patch from stack trace — no reproduction, no deploy loop); Datadog Bits /
-incident.io (summarize and route).
+- **Cheap PaaS** (Heroku, Render, Railway, Fly.io): run your app, email you when
+  it dies. None auto-fix. We match their price and add the part that matters.
+- **AI SRE copilots** (Resolve.ai, Cleric, Traversal): sell to enterprises with
+  existing on-call teams; they investigate and *explain*, a human ships the fix.
+  We serve the 100× larger population that has no on-call team at all.
+- **Sentry Seer / Copilot autofix**: patch from a stack trace inside the dev
+  workflow — no live logs, no deploy loop, no verification against the running app.
 
-The edge, stated as one sentence: **they stop at a diagnosis or a guessed patch;
-we stop at healed traffic, and every fix we ship carries a machine-checkable
-proof.** Trust is the product, not the patch. Teams will never auto-merge a
-patch a model "thinks" is right; they will happily auto-merge one that arrives
-with a red-then-green test, a green suite, and a canary behind it — that's the
-same bar they hold humans to. We automate the evidence, not just the edit.
+The edge in one sentence: **because the apps run on us, the AI has production
+access on day zero, and every fix ships with build + smoke-test verification —
+they stop at a suggestion; we stop at healed traffic.**
 
-Honest scoping (say this before a partner does): many incidents are infra/config/
-data problems, not code bugs. The AI SRE copilots chase that whole surface; we
-deliberately own the code-defect slice end-to-end, because it's the slice where
-proof is possible and full autonomy is therefore earnable. Beachhead, not ceiling.
+Honest scoping (say it before a partner does): the medic owns the code-defect
+slice; infra faults are handled by the dumber-but-reliable layers (restart,
+rebuild, redeploy). That layering — cheap reflexes first, expensive intelligence
+only when reflexes fail — is also the unit-economics answer.
 
-## How do people use it? (distribution answer — also the honest roadmap)
+## How do people use it? (all of this is live today)
 
-- **Today (prototype/demo):** docker-compose sidecar next to a containerized app.
-- **Product (what customers actually install):**
-  1. Connect an alert source — Sentry / Datadog / CloudWatch webhook (5 min).
-  2. Install the GitHub App (repo read + PR write).
-  3. On incident: we reproduce in **our** sandboxed cloud runners, and the output
-     lands as a **pull request in their repo**: failing test + minimal fix + canary
-     config. The PR *is* the human gate — approve = merge = their existing CD ships it.
-  4. Autonomy is a dial: PR-only → auto-merge-on-green → full closed loop for
-     teams that earn confidence.
-- **Customers never run our Docker stack.** Zero infra change, no agent in their
-  prod, no socket access. That's the difference between a demo and a product.
+1. Get an invite (invite-only while we scale the fleet) → sign up, 6-digit
+   email verification.
+2. Connect GitHub (GitHub App or PAT), pick one repo or several — each becomes
+   its own service with its own subdomain; siblings get auto-wired env vars and
+   an /api bridge (no CORS config, ever).
+3. Deploy. The AI writes the Dockerfile if the repo has none, detects the port,
+   smoke-tests, and gives an AI verdict on the deploy log — all streaming live.
+4. One-click Postgres, wired into every service as DATABASE_URL.
+5. Every git push redeploys (webhook + poll). Watchdog restarts/rebuilds crashed
+   containers. Chat with the medic about any bug; approve its verified diff and
+   it commits + redeploys.
 
 ## Business model
 
-Per-repo/per-seat SaaS with usage-based incident pricing. Anchor: one prevented
-sev-2 (~eng-hours + downtime) >> $500/mo. Land with on-call-heavy Series A–C
-startups (10–100 engineers, Sentry/Datadog already installed), expand to platform
-teams. Later: enterprise self-hosted runners.
+$2.99/mo per project (0.25 vCPU / 1 GB RAM / 5 GB storage, Postgres and medic
+included). Server cost at current density: a $6/mo 8 GB VPS hosts ~7 paying
+projects — infrastructure gross margin ~65% before AI spend; AI spend is
+per-incident and small (one medic fix ≈ a few cents of tokens). Upsell path:
+bigger tiers, team seats, then "bring your own infra" — the medic and deploy
+brain as a control plane over the customer's cloud, at SaaS pricing. Land with
+indie hackers and agencies (dozens of small client apps, no on-call), expand
+upward.
 
-## Progress
+## Progress (all real, all verifiable at cicatrixa.com)
 
-Working end-to-end system: crash detection → root-cause diagnosis → sandboxed
-failing-test reproduction → verified patch (repro passes + full suite green) →
-Traefik weighted-canary deploy with auto-promote/auto-rollback → live dashboard.
-[By application time this line should also say: "N design partners, M real bugs
-healed in real repos" — see checklist.]
+- Platform built and shipped **in 3 days** (July 17–19, 2026): multi-tenant
+  control plane, AI build engine, watchdogs, chat medic, Postgres provisioning,
+  quotas (per-user + instance-wide), invite system, admin panel, email flows.
+- Live on cicatrixa.com with automatic HTTPS per project subdomain.
+- The full loop has run for real: the medic diagnosed a genuine production
+  ZeroDivisionError from live logs, committed the fix to GitHub
+  (`9230c72`), redeployed, and the endpoint went 500 → 200 — captured on video.
+- Adversarial test fixtures (deliberately hostile repos: wrong README, broken
+  Dockerfile, foreign API baked into inline scripts) found and fixed 4 real
+  engine bugs — kept as a standing regression suite.
+- Invite-only: [UPDATE AT SUBMIT: N users, M deployments, K medic fixes —
+  pull live numbers from /admin].
 
----
+## Demo assets
 
-## 60-second demo video script
+- 60-sec YC demo: raw screen capture of the real product, founder voiceover
+  (see `yc/demo_voiceover.md`, cut at `demo/yc_demo.mp4`).
+- 2-min brand film for the landing page: `demo/CICATRIXA_COMMERCIAL.mp4`.
+- Partner walkthrough: demo account available on request (invite-gated).
 
-One unbroken screen recording, three windows tiled: terminal, healer dashboard
-(localhost:9000), Traefik dashboard (localhost:8080). Voiceover, no music.
+## Founder section — fill in personally
 
-- **0:00–0:08** — "This is a live order API in production. I'm going to break it."
-  `curl -X POST localhost/trigger-bug` ×3 → three 500s on screen.
-- **0:08–0:20** — Dashboard: watchdog stage lights up, real traceback captured.
-  "Our agent caught the crash from the logs. Now watch what it does *before*
-  writing any fix."
-- **0:20–0:35** — Reproducer stage: failing test appears. "It wrote a failing test
-  and proved the bug in a sandboxed container. No reproduction, no patch — that's
-  the rule. This is what every other AI-fixes-bugs tool skips."
-- **0:35–0:48** — Fixer: diff on screen, "repro test passes, full suite green."
-  Deployer: cut to Traefik weights flipping 100/0 → 80/20 → 0/100. "Verified fix,
-  shipped as a canary to real traffic, auto-promoted."
-- **0:48–0:60** — `curl -X POST localhost/trigger-bug` → 200. "Bug found, proven,
-  fixed, tested, and deployed. Zero human intervention, under N minutes. We're
-  Cicatrixa — the AI SRE that proves the fix before shipping it."
+- Who you are, what you've built before, why this problem is yours.
+- If applying solo, say so plainly and cover it: shipping velocity above is the
+  evidence (this platform went idea → live paying-ready product in 72 hours).
+- Equity/incorporation: answer honestly; YC handles Delaware C-corp post-accept.
 
-Record 5+ takes; the run is nondeterministic. Keep the best. Never demo live.
+## Submission checklist (final week)
 
-## Pre-application checklist (in priority order)
-
-1. **Rehearse the loop until it's boring.** Run end-to-end 10+ times; fix flakes.
-2. **Add 2–3 more seeded bug types** (unhandled None, off-by-one in pagination,
-   bad exception swallowing) — proves generality in 30 extra seconds of video.
-3. **Kill the "toy repo" objection:** run the pipeline against a real OSS FastAPI
-   project with a real historical bug re-introduced. Screenshot it.
-4. **Design partners (the single highest-leverage item):** DM 20 infra/platform
-   engineers you know; offer to heal one real bug free. Target: 3–5 "yes, we'd
-   pilot" — named logos or quotes go straight into the application.
-5. **Record the demo video** (script above) + founder video (30s, plain, why you).
-6. **Ship the landing page** (`site/index.html` in this repo) to Vercel/Netlify
-   with a waitlist form; put the demo video on it. Post to HN/Twitter — waitlist
-   count is a traction line.
-7. **Fill the application** from this doc. Short declarative sentences. No hype
-   words YC filters ("revolutionary", "platform", "ecosystem").
+- [x] Narrative locked: self-healing hosting at $2.99/mo.
+- [ ] Pricing visible on landing page.
+- [ ] Admin stats page → real funnel numbers for the Progress line.
+- [ ] YC demo video recorded (voiceover over raw takes).
+- [ ] Founder video (30–60s, phone, plain).
+- [ ] 10–20 real invites out; every active user counts.
+- [ ] ToS/privacy stubs live (collecting emails).
+- [ ] Server hardening + nightly DB backup (protect the traction data).
+- [ ] Submit **July 26** — not at the deadline.
