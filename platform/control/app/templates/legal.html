@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ page_title }} — Cicatrixa{% endblock %}
+{% block content %}
+<div style="max-width:680px;margin:40px auto">
+  <div class="lbl-caps">{{ kicker }}</div>
+  <h1>{{ page_title }}</h1>
+  <p class="sub">Last updated July 20, 2026 · plain English, no dark patterns.</p>
+  <div class="card" style="line-height:1.75;font-size:15px">
+    {% if page == 'terms' %}
+      <p><strong>The service.</strong> Cicatrixa hosts applications you deploy from your own
+        GitHub repositories, on subdomains of cicatrixa.com. It is currently invite-only and
+        offered as-is while in early access.</p>
+      <p><strong>Your code stays yours.</strong> You keep all rights to your repositories and
+        applications. You grant us only what's needed to build, run, and — when you explicitly
+        approve a fix — commit to them.</p>
+      <p><strong>Fair use.</strong> Per-account resource quotas apply (shown at deploy time).
+        No crypto mining, no abuse infrastructure, nothing illegal. We may suspend workloads
+        that threaten the shared platform.</p>
+      <p><strong>AI features.</strong> Build planning and the fix medic use third-party AI
+        models. Proposed fixes are always shown to you as a diff before anything touches your
+        repository. Your code is not used to train models.</p>
+      <p><strong>Pricing.</strong> $2.99 per project per month (0.25 vCPU · 1 GB RAM · 5 GB
+        storage) once billing launches; early-access invitees are notified before any charge.</p>
+      <p><strong>Liability.</strong> Early-access software: we work hard to keep your apps
+        alive (it's the whole point) but the service is provided without warranty, and our
+        liability is capped at what you've paid us.</p>
+      <p><strong>Contact.</strong> <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>
+        — a founder answers.</p>
+    {% else %}
+      <p><strong>What we collect.</strong> Your email address (signup, access requests), your
+        password (stored only as a scrypt hash), the GitHub connection you grant, and the
+        operational data needed to run your apps: repositories you deploy, build and container
+        logs, and resource usage.</p>
+      <p><strong>What we do with it.</strong> Run your apps, email you about your deploys and
+        account, and nothing else. No advertising, no selling data, no third-party analytics
+        on this site.</p>
+      <p><strong>Who else sees data.</strong> Transactional email via Resend; AI model calls
+        (build planning, fix proposals) include the relevant code/log context and are not used
+        for training. Your apps run in isolated containers on our servers.</p>
+      <p><strong>Deletion.</strong> Delete a project and its containers, images, and build
+        workspaces are removed. Want your whole account gone? One email:
+        <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>.</p>
+      <p><strong>Cookies.</strong> One signed session cookie to keep you logged in. That's it.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

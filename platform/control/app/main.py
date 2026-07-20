@@ -93,6 +93,18 @@ async def landing(request: Request):
     return render(request, "landing.html")
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_page(request: Request):
+    return render(request, "legal.html", page="terms",
+                  page_title="Terms of Service", kicker="the deal, in plain words")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page(request: Request):
+    return render(request, "legal.html", page="privacy",
+                  page_title="Privacy Policy", kicker="what we know and why")
+
+
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, invite: str = ""):
     if invites.bootstrap_open():
