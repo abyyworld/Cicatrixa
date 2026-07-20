@@ -196,6 +196,26 @@ def global_usage() -> dict:
     }
 
 
+# ---------- growth stats (admin dashboard / funnel numbers) ----------
+
+def growth_stats() -> dict:
+    """Signup/deploy funnel counts for the admin page."""
+    week_ago = time.time() - 7 * 86400
+    c = lambda sql, *a: db.one(sql, a)["c"]
+    return {
+        "users": c("SELECT COUNT(*) c FROM users"),
+        "users_verified": c("SELECT COUNT(*) c FROM users WHERE email_verified=1"),
+        "users_7d": c("SELECT COUNT(*) c FROM users WHERE created_at>?", week_ago),
+        "projects": c("SELECT COUNT(*) c FROM projects"),
+        "deploys": c("SELECT COUNT(*) c FROM deployments"),
+        "deploys_7d": c("SELECT COUNT(*) c FROM deployments WHERE created_at>?", week_ago),
+        "deploys_ok": c("SELECT COUNT(*) c FROM deployments WHERE status='success'"),
+        "medic_fixes": c("SELECT COUNT(*) c FROM deployments WHERE trigger='chat-fix'"),
+        "invites_sent": c("SELECT COUNT(*) c FROM invites"),
+        "invites_used": c("SELECT COUNT(*) c FROM invites WHERE status='used'"),
+    }
+
+
 # ---------- quota enforcement ----------
 
 def check_service_count(user, extra: int = 1) -> str | None:

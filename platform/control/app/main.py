@@ -661,6 +661,7 @@ async def admin_page(request: Request):
                   defaults=metrics.universal_quota(),
                   global_limits=metrics.global_limits(),
                   global_usage=metrics.global_usage(),
+                  growth=metrics.growth_stats(),
                   pending_requests=invites.pending_requests(),
                   sent_invites=invites.sent_invites(),
                   error=request.query_params.get("error"))

@@ -9,6 +9,26 @@
     · AI: <code>{{ 'on' if ai_on else 'off — set OPENAI_API_KEY' }}</code></p>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
 
+  <div class="card" style="margin-bottom:14px;padding:16px 22px">
+    <div class="lbl-caps" style="margin-bottom:10px">growth</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px">
+      {% for label, val in [
+        ("users", growth.users ~ " (" ~ growth.users_verified ~ " verified)"),
+        ("new this week", "+" ~ growth.users_7d),
+        ("projects", growth.projects),
+        ("deploys", growth.deploys ~ " (" ~ growth.deploys_ok ~ " ok)"),
+        ("deploys this week", "+" ~ growth.deploys_7d),
+        ("medic fixes shipped", growth.medic_fixes),
+        ("invites", growth.invites_used ~ "/" ~ growth.invites_sent ~ " used"),
+      ] %}
+      <div>
+        <div class="lbl-caps" style="font-size:10px">{{ label }}</div>
+        <div style="font-size:20px;font-weight:600">{{ val }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
   <div class="card" style="display:flex;gap:34px;flex-wrap:wrap;padding:16px 22px;margin-bottom:14px">
     {% if host.ram_total %}
       {{ meter("server ram", fmt_bytes(host.ram_used), fmt_bytes(host.ram_total),
