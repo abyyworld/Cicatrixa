@@ -243,6 +243,15 @@
   .faq summary::after{content:"+";font-family:ui-monospace,Menlo,monospace;color:var(--healed);font-size:18px;transition:transform .25s;flex-shrink:0}
   .faq details[open] summary::after{transform:rotate(45deg)}
   .faq details p{margin:0 0 18px;color:var(--muted);font-size:14.5px}
+  .price{margin-top:44px;max-width:520px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:34px 38px;transition:border-color .25s}
+  .price:hover{border-color:var(--healed-dim)}
+  .price .amount{font-size:52px;font-weight:700;letter-spacing:-1px}
+  .price .amount small{font-size:16px;color:var(--muted);font-weight:400;letter-spacing:0}
+  .price .spec{font-family:ui-monospace,Menlo,monospace;font-size:14px;color:var(--healed);margin-top:6px}
+  .price ul{list-style:none;margin:22px 0 26px;padding:0;display:grid;gap:10px}
+  .price li{font-size:14.5px;color:var(--muted);padding-left:24px;position:relative}
+  .price li::before{content:"✓";position:absolute;left:0;color:var(--healed);font-family:ui-monospace,Menlo,monospace}
+  .price .note{font-size:13px;color:var(--muted);margin-top:14px}
 
   .contactrow{display:flex;gap:18px;flex-wrap:wrap;margin-top:34px}
   .contactcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 26px;min-width:240px;transition:border-color .25s}
@@ -280,6 +289,7 @@
       <a href="#why">why</a>
       <a href="#loop">how it works</a>
       <a href="#install">quickstart</a>
+      <a href="#pricing">pricing</a>
       <a href="#faq">faq</a>
       <a href="#contact">contact</a>
     </nav>
@@ -471,6 +481,28 @@
     </div>
   </section>
 
+  <section class="reveal" id="pricing">
+    <p class="eyebrow">Pricing</p>
+    <h2>Three dollars a month.<br>An SRE that never sleeps.</h2>
+    <p class="measure">One plan, everything included. Cheaper than the cheapest dyno you've
+      ever rented — except this one notices when your app dies, and fixes it.</p>
+    <div class="price">
+      <div class="amount">$2.99<small> / project / month</small></div>
+      <div class="spec">0.25 vCPU · 1 GB RAM · 5 GB storage</div>
+      <ul>
+        <li>Your own subdomain with automatic HTTPS</li>
+        <li>AI build engine — no Dockerfile, no config</li>
+        <li>One-click Postgres, wired in as DATABASE_URL</li>
+        <li>Crash watchdog: restart → rebuild, on its own</li>
+        <li>AI medic: verified fixes committed to your GitHub</li>
+        <li>Multi-repo projects with a same-origin /api bridge</li>
+      </ul>
+      <a class="cta" href="/signup">Deploy your first repo →</a>
+      <p class="note">Invite-only while we scale the fleet — <a href="/request-access">request access</a>
+        and we'll wave you in.</p>
+    </div>
+  </section>
+
   <section class="reveal" id="faq">
     <p class="eyebrow">Questions, answered straight</p>
     <h2>The things you'd ask before<br>connecting your GitHub.</h2>
@@ -516,7 +548,7 @@
     <p class="eyebrow">Start now</p>
     <h2>Stop being your own<br>on-call engineer.</h2>
     <p class="measure">Sign up, connect GitHub, and deploy something real in the next five
-      minutes — no credit card, no waitlist.</p>
+      minutes. $2.99 a month once you love it — just an invite to start.</p>
     <a class="cta" href="/signup">Deploy your first repo →</a>
   </div>
 </div>
