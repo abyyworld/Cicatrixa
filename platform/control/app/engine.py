@@ -25,6 +25,7 @@ WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
 MAX_ATTEMPTS = 3
 COMMON_PORTS = [3000, 8000, 8080, 5000, 80, 4000, 8501, 5173, 9000, 3001]
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
+CPU_PER_CONTAINER = float(os.environ.get("CPU_PER_CONTAINER", "0.25"))
 API_NAME_RE = re.compile(r"(api|backend|server|graphql|rest)", re.I)
 
 
@@ -395,7 +396,7 @@ def _run_container(service, image: str, port: int, name: str, plan: dict | None 
     client = dock()
     container = client.containers.create(
         image, name=name, labels=_labels(service, port, plan),
-        mem_limit=f"{RAM_PER_CONTAINER_MB}m", nano_cpus=1_000_000_000,
+        mem_limit=f"{RAM_PER_CONTAINER_MB}m", nano_cpus=int(CPU_PER_CONTAINER * 1e9),
         restart_policy={"Name": "unless-stopped"}, environment=env,
     )
     net = client.networks.get(NETWORK)
