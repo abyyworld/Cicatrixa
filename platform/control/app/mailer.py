@@ -40,24 +40,18 @@ border-radius:14px;padding:32px 34px;overflow:hidden">
 margin-bottom:24px">{eyebrow}</div>
 {body_html}
 <div style="margin-top:30px;padding-top:18px;border-top:1px solid #1F2B24;
-font-size:11.5px;color:#74857B">Cicatrixa · AI-operated hosting</div>
+font-size:11.5px;color:#74857B">Cicatrixa</div>
 </div></div>"""
 
 
 def send_verification_code(to: str, code: str) -> bool:
-    digits = "".join(
-        f'<td style="width:40px;height:52px;text-align:center;vertical-align:middle;'
-        f'background:#0C1210;border:1px solid #2C7A45;border-radius:8px;'
-        f'font-size:24px;font-weight:600;color:#40D967;letter-spacing:0">{d}</td>'
-        f'<td style="width:8px"></td>'
-        for d in code
-    )
     html = _wrap("verify your email", f"""
 <p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">
 Enter this code to finish signing in to Cicatrixa. It expires in 10 minutes.</p>
-<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px">
-<tr>{digits}</tr>
-</table>
+<div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:34px;
+font-weight:700;color:#40D967;letter-spacing:.28em;background:#0C1210;
+border:1px solid #2C7A45;border-radius:10px;padding:18px 20px 18px 26px;
+margin:0 0 22px;text-align:center">{code}</div>
 <p style="font-size:12.5px;color:#74857B;margin:0">Didn't request this? You can ignore this
 email — nothing happens without the code.</p>""")
     return send(to, f"{code} is your Cicatrixa verification code",

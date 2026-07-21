@@ -48,11 +48,13 @@ def set_universal_quota(services: int, ram_mb: int, disk_mb: int, databases: int
 
 
 def user_quota(user) -> dict:
+    from . import referrals
     d = universal_quota()
+    mult = 1 + referrals.bonus_pct(user["id"]) / 100
     return {
-        "services": user["quota_services"] or d["services"],
-        "ram_mb": user["quota_ram_mb"] or d["ram_mb"],
-        "disk_mb": user["quota_disk_mb"] or d["disk_mb"],
+        "services": round((user["quota_services"] or d["services"]) * mult),
+        "ram_mb": round((user["quota_ram_mb"] or d["ram_mb"]) * mult),
+        "disk_mb": round((user["quota_disk_mb"] or d["disk_mb"]) * mult),
         "databases": d["databases"],
     }
 

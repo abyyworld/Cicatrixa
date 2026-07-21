@@ -112,7 +112,18 @@ async function refreshRepos(showFeedback){
   btn.disabled = true;
   try {
     const repos = await fetch('/api/repos').then(r => r.json());
-    let added = 0;
+    const freshNames = new Set(repos.map(r => r.full_name.toLowerCase()));
+    let added = 0, removed = 0;
+
+    // Drop repos no longer granted to the GitHub App
+    for (const row of [...document.querySelectorAll('.repo-row')]) {
+      if (!freshNames.has(row.dataset.name)) {
+        _knownRepos.delete(row.dataset.name);
+        row.remove();
+        removed++;
+      }
+    }
+
     for(const r of repos){
       if(!_knownRepos.has(r.full_name.toLowerCase())){
         _knownRepos.add(r.full_name.toLowerCase());
@@ -120,13 +131,17 @@ async function refreshRepos(showFeedback){
         added++;
       }
     }
+
     if(showFeedback){
-      btn.textContent = added ? `↻ ${added} new repo${added>1?'s':''} added` : '↻ up to date';
+      const parts = [];
+      if(added) parts.push(`${added} added`);
+      if(removed) parts.push(`${removed} removed`);
+      btn.textContent = parts.length ? `↻ ${parts.join(', ')}` : '↻ up to date';
       setTimeout(()=>{ btn.textContent = orig; btn.disabled = false; }, 2000);
     } else {
       btn.textContent = orig; btn.disabled = false;
     }
-    if(added) document.getElementById('gh-hint').style.display = 'none';
+    if(added || removed) document.getElementById('gh-hint').style.display = 'none';
   } catch(e) {
     btn.textContent = orig; btn.disabled = false;
   }

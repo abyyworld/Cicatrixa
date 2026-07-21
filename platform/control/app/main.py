@@ -11,7 +11,8 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import ai, auth, bus, db, dbprovision, engine, gh, invites, mailer, medic, metrics, watchdog
+from . import (ai, auth, bus, db, dbprovision, engine, gh, invites, mailer,
+               medic, metrics, referrals, watchdog)
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -24,6 +25,7 @@ app = FastAPI(title="Cicatrixa")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 templates.env.globals["fmt_bytes"] = metrics.fmt_bytes
 templates.env.globals["ram_per_container"] = metrics.RAM_PER_CONTAINER_MB
+templates.env.globals["now"] = db.now
 
 
 # ---------- helpers ----------
@@ -83,6 +85,13 @@ async def startup():
         engine.dock().networks.create(engine.NETWORK, driver="bridge")
     except Exception:
         pass
+    # Builds run inside this container — a restart mid-build orphans the
+    # deployment as "running" forever. Mark those failed and retry them.
+    for o in db.all_("SELECT id, service_id FROM deployments WHERE status='running'"):
+        db.q("UPDATE deployments SET status='failed', finished_at=?, "
+             "log=log || char(10) || '✗ interrupted by platform restart — retrying' "
+             "WHERE id=?", (db.now(), o["id"]))
+        asyncio.create_task(engine.deploy(o["service_id"], trigger="retry"))
     asyncio.create_task(watchdog.run_forever())
 
 
@@ -106,43 +115,57 @@ async def privacy_page(request: Request):
 
 
 @app.get("/signup", response_class=HTMLResponse)
-async def signup_page(request: Request, invite: str = ""):
+async def signup_page(request: Request, invite: str = "", ref: str = ""):
     if invites.bootstrap_open():
-        return render(request, "signup.html", error=None, invite_token="", invite_email="")
+        return render(request, "signup.html", error=None, invite_token="",
+                      invite_email="", ref_code="", referrer_email="")
+    if ref:
+        referrer = referrals.referrer_for(ref)
+        if referrer:
+            return render(request, "signup.html", error=None, invite_token="",
+                          invite_email="", ref_code=ref,
+                          referrer_email=referrer["email"])
+        return render(request, "signup.html", error="That invite link isn't valid.",
+                      invite_token="", invite_email="", ref_code="",
+                      referrer_email="", invalid=True)
     if not invite:
         return RedirectResponse("/request-access", status_code=303)
     row = db.one("SELECT * FROM invites WHERE token=?", (invite,))
     if not row or row["status"] not in ("approved",):
         return render(request, "signup.html", error="That invite link isn't valid or has "
-                      "already been used.", invite_token="", invite_email="", invalid=True)
+                      "already been used.", invite_token="", invite_email="",
+                      ref_code="", referrer_email="", invalid=True)
     return render(request, "signup.html", error=None, invite_token=invite,
-                  invite_email=row["email"])
+                  invite_email=row["email"], ref_code="", referrer_email="")
 
 
 @app.post("/signup")
 async def signup(request: Request, email: str = Form(...), password: str = Form(...),
-                 invite_token: str = Form("")):
+                 invite_token: str = Form(""), ref_code: str = Form("")):
     email = email.strip().lower()
+
+    def fail(msg):
+        return render(request, "signup.html", error=msg, invite_token=invite_token,
+                      invite_email="", ref_code=ref_code, referrer_email="")
+
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return render(request, "signup.html", error="That doesn't look like an email.",
-                      invite_token=invite_token, invite_email="")
+        return fail("That doesn't look like an email.")
     if len(password) < 8:
-        return render(request, "signup.html", error="Password must be at least 8 characters.",
-                      invite_token=invite_token, invite_email="")
+        return fail("Password must be at least 8 characters.")
     if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
-        return render(request, "signup.html", error="An account with that email already exists.",
-                      invite_token=invite_token, invite_email="")
+        return fail("An account with that email already exists.")
     is_admin = email in ADMIN_EMAILS or invites.bootstrap_open()
-    if not is_admin:
+    referrer = referrals.referrer_for(ref_code) if ref_code else None
+    if not is_admin and not referrer:
         ok, err = invites.resolve(invite_token, email) if invite_token else \
             (False, "This instance is invite-only — request access below.")
         if not ok:
-            return render(request, "signup.html", error=err, invite_token=invite_token,
-                          invite_email="")
-    uid = db.q("INSERT INTO users(email,pw_hash,is_admin,created_at) VALUES(?,?,?,?)",
+            return fail(err)
+    uid = db.q("INSERT INTO users(email,pw_hash,is_admin,referred_by,created_at) "
+               "VALUES(?,?,?,?,?)",
                (email, auth.hash_password(password), 1 if is_admin else 0,
-                db.now())).lastrowid
-    if not is_admin and invite_token:
+                referrer["id"] if referrer else None, db.now())).lastrowid
+    if not is_admin and not referrer and invite_token:
         invites.mark_used(invite_token)
     return _start_verification(uid, email)
 
@@ -293,6 +316,10 @@ async def dashboard(request: Request):
                   services_by_project=services_by_project,
                   usage=metrics.user_usage(user["id"]),
                   quota=metrics.user_quota(user),
+                  invite_link=f"{BASE_URL}/signup?ref={referrals.code_for(user)}",
+                  ref_stats=referrals.stats_for(user["id"]),
+                  is_paid=referrals.is_paid(user),
+                  trial_days_left=referrals.trial_days_left(user),
                   error=qp.get("error"), verified=qp.get("verified"))
 
 
@@ -336,6 +363,10 @@ async def create_project(request: Request):
                         "ORDER BY id DESC LIMIT 1", (user["id"],))
     if not connection:
         return RedirectResponse("/connect/github", status_code=303)
+    ok, trial_err = referrals.can_deploy(user)
+    if not ok:
+        return RedirectResponse("/projects/new?error=" + trial_err.replace(" ", "+"),
+                                status_code=303)
     form = await request.form()
     repos = [r for r in form.getlist("repos") if r.strip()]
     if not repos:
@@ -419,6 +450,10 @@ async def redeploy(request: Request, project_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
+    ok, trial_err = referrals.can_deploy(user)
+    if not ok:
+        return RedirectResponse(f"/projects/{project_id}?error="
+                                + trial_err.replace(" ", "+"), status_code=303)
     asyncio.create_task(engine.deploy_project(project_id, "manual"))
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
@@ -438,6 +473,10 @@ async def redeploy_service(request: Request, service_id: int):
     user, service = _own_service(request, service_id)
     if not service:
         return need_login(request)
+    ok, trial_err = referrals.can_deploy(user)
+    if not ok:
+        return RedirectResponse(f"/projects/{service['project_id']}?error="
+                                + trial_err.replace(" ", "+"), status_code=303)
     asyncio.create_task(engine.deploy(service_id, "manual"))
     return RedirectResponse(f"/projects/{service['project_id']}", status_code=303)
 
@@ -461,6 +500,10 @@ async def add_service(request: Request, project_id: int, repo: str = Form(...),
                         "ORDER BY id DESC LIMIT 1", (user["id"],))
     if not connection:
         return RedirectResponse("/connect/github", status_code=303)
+    ok, trial_err = referrals.can_deploy(user)
+    if not ok:
+        return RedirectResponse(f"/projects/{project_id}?error="
+                                + trial_err.replace(" ", "+"), status_code=303)
     quota_err = metrics.check_service_count(user, extra=1)
     if quota_err:
         return RedirectResponse(f"/projects/{project_id}?error="
@@ -694,6 +737,22 @@ async def set_quota(request: Request, user_id: int,
     db.q("UPDATE users SET quota_services=?, quota_ram_mb=?, quota_disk_mb=? "
          "WHERE id=?", (parse(quota_services), parse(quota_ram_mb),
                         parse(quota_disk_mb), user_id))
+    return RedirectResponse("/admin", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/paid")
+async def mark_paid(request: Request, user_id: int):
+    """Extend a user's paid period by 30 days (manual billing until Stripe
+    lands). First payment also credits their referrer's +20% bonus."""
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    target = db.one("SELECT * FROM users WHERE id=?", (user_id,))
+    if target:
+        base = max(target["paid_until"] or 0, db.now())
+        db.q("UPDATE users SET paid_until=? WHERE id=?",
+             (base + 30 * 86400, user_id))
+        referrals.record_conversion(user_id)
     return RedirectResponse("/admin", status_code=303)
 
 

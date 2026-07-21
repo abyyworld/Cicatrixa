@@ -115,9 +115,24 @@ def conn() -> sqlite3.Connection:
     return c
 
 
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN referral_code TEXT",
+    "ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)",
+    "ALTER TABLE users ADD COLUMN referral_converted INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN paid_until REAL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)",
+]
+
+
 def init():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn().executescript(SCHEMA)
+    for stmt in MIGRATIONS:
+        try:
+            conn().execute(stmt)
+            conn().commit()
+        except sqlite3.OperationalError:
+            pass  # column/index already exists
     # additive migrations for databases created before these columns existed
     for table, col, ctype in (("users", "quota_services", "INTEGER"),
                               ("users", "quota_ram_mb", "INTEGER"),
