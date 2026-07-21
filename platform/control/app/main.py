@@ -11,8 +11,8 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import (ai, auth, bus, db, dbprovision, engine, gh, invites, mailer,
-               medic, metrics, referrals, watchdog)
+from . import (ai, auth, billing, bus, db, dbprovision, engine, gh, invites,
+               mailer, medic, metrics, referrals, watchdog)
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -116,37 +116,21 @@ async def privacy_page(request: Request):
 
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, invite: str = "", ref: str = ""):
-    if invites.bootstrap_open():
-        return render(request, "signup.html", error=None, invite_token="",
-                      invite_email="", ref_code="", referrer_email="")
-    if ref:
-        referrer = referrals.referrer_for(ref)
-        if referrer:
-            return render(request, "signup.html", error=None, invite_token="",
-                          invite_email="", ref_code=ref,
-                          referrer_email=referrer["email"])
-        return render(request, "signup.html", error="That invite link isn't valid.",
-                      invite_token="", invite_email="", ref_code="",
-                      referrer_email="", invalid=True)
-    if not invite:
-        return RedirectResponse("/request-access", status_code=303)
-    row = db.one("SELECT * FROM invites WHERE token=?", (invite,))
-    if not row or row["status"] not in ("approved",):
-        return render(request, "signup.html", error="That invite link isn't valid or has "
-                      "already been used.", invite_token="", invite_email="",
-                      ref_code="", referrer_email="", invalid=True)
-    return render(request, "signup.html", error=None, invite_token=invite,
-                  invite_email=row["email"], ref_code="", referrer_email="")
+    """Open signup — everyone gets a 14-day free trial. A ?ref= link
+    additionally ties the account to its referrer for the quota bonus."""
+    referrer = referrals.referrer_for(ref) if ref else None
+    return render(request, "signup.html", error=None, ref_code=ref if referrer else "",
+                  referrer_email=referrer["email"] if referrer else "")
 
 
 @app.post("/signup")
 async def signup(request: Request, email: str = Form(...), password: str = Form(...),
-                 invite_token: str = Form(""), ref_code: str = Form("")):
+                 ref_code: str = Form("")):
     email = email.strip().lower()
 
     def fail(msg):
-        return render(request, "signup.html", error=msg, invite_token=invite_token,
-                      invite_email="", ref_code=ref_code, referrer_email="")
+        return render(request, "signup.html", error=msg, ref_code=ref_code,
+                      referrer_email="")
 
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return fail("That doesn't look like an email.")
@@ -156,17 +140,10 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
         return fail("An account with that email already exists.")
     is_admin = email in ADMIN_EMAILS or invites.bootstrap_open()
     referrer = referrals.referrer_for(ref_code) if ref_code else None
-    if not is_admin and not referrer:
-        ok, err = invites.resolve(invite_token, email) if invite_token else \
-            (False, "This instance is invite-only — request access below.")
-        if not ok:
-            return fail(err)
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,referred_by,created_at) "
                "VALUES(?,?,?,?,?)",
                (email, auth.hash_password(password), 1 if is_admin else 0,
                 referrer["id"] if referrer else None, db.now())).lastrowid
-    if not is_admin and not referrer and invite_token:
-        invites.mark_used(invite_token)
     return _start_verification(uid, email)
 
 
@@ -320,6 +297,7 @@ async def dashboard(request: Request):
                   ref_stats=referrals.stats_for(user["id"]),
                   is_paid=referrals.is_paid(user),
                   trial_days_left=referrals.trial_days_left(user),
+                  billing_on=billing.available(), just_paid=qp.get("paid"),
                   error=qp.get("error"), verified=qp.get("verified"))
 
 
@@ -835,6 +813,38 @@ async def admin_github_callback(request: Request, code: str = ""):
     if code:
         await asyncio.to_thread(gh.exchange_manifest_code, code)
     return RedirectResponse("/admin", status_code=303)
+
+
+# ---------- billing ----------
+
+@app.post("/billing/checkout")
+async def billing_checkout(request: Request):
+    user = current_user(request)
+    if not user:
+        return need_login(request)
+    if not billing.available():
+        return RedirectResponse(
+            "/dashboard?error=" + "Payments aren't live yet — email "
+            "hello@cicatrixa.com and we'll set you up.".replace(" ", "+"),
+            status_code=303)
+    projects = db.one("SELECT COUNT(*) c FROM projects WHERE user_id=?",
+                      (user["id"],))["c"]
+    try:
+        url = await asyncio.to_thread(billing.checkout_url, user, projects, BASE_URL)
+        return RedirectResponse(url, status_code=303)
+    except Exception:
+        return RedirectResponse(
+            "/dashboard?error=" + "Could not start checkout — try again in a "
+            "minute.".replace(" ", "+"), status_code=303)
+
+
+@app.post("/api/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    if not billing.verify_signature(body, request.headers.get("Stripe-Signature", "")):
+        return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
+    result = await asyncio.to_thread(billing.handle_event, body)
+    return {"ok": True, "result": result}
 
 
 # ---------- webhooks (watchdog: instant redeploy on push) ----------

@@ -5,15 +5,26 @@
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 {% if verified %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:18px;padding:12px 18px">
   <span class="mono" style="color:var(--healed);font-size:13px">✔ email verified.</span></div>{% endif %}
-{% if not is_paid and not user.is_admin %}
+{% if just_paid %}
+<div class="card" style="border-color:var(--healed-dim);margin-bottom:18px;padding:12px 18px">
+  <span class="mono" style="color:var(--healed);font-size:13px">✔ subscription active — thanks for supporting Cicatrixa. Your account upgrades within a minute.</span></div>
+{% endif %}
+{% if not is_paid and not user.is_admin and not just_paid %}
   {% if trial_days_left > 0 %}
   <div class="card" style="margin-bottom:18px;padding:12px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
     <span class="mono" style="font-size:13px;color:var(--amber)">⏳ free trial — {{ trial_days_left }} day{{ 's' if trial_days_left != 1 }} left</span>
     <span class="mono muted" style="font-size:12.5px">then $2.99 / project / month · running services never stop</span>
+    <span style="margin-left:auto"></span>
+    <form method="post" action="/billing/checkout" style="margin:0">
+      <button class="btn sm">Subscribe now →</button></form>
   </div>
   {% else %}
-  <div class="err" style="margin-bottom:18px">Your 14-day trial has ended — new deploys are paused.
-    Your running services stay up. <a href="mailto:hello@cicatrixa.com?subject=Subscribe" style="color:inherit">Subscribe to keep deploying →</a></div>
+  <div class="err" style="margin-bottom:18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <span>Your 14-day free trial has ended — new deploys are paused. Running services stay up.</span>
+    <span style="margin-left:auto"></span>
+    <form method="post" action="/billing/checkout" style="margin:0">
+      <button class="btn sm">Subscribe — $2.99/project/mo →</button></form>
+  </div>
   {% endif %}
 {% endif %}
 <div style="display:flex;align-items:center;gap:16px">
@@ -93,7 +104,7 @@ document.getElementById('dc-overlay').addEventListener('click',e=>{
   <div style="flex:1;min-width:240px">
     <div style="font-weight:600;font-size:14px">Invite a friend, earn capacity</div>
     <div class="muted" style="font-size:12.5px;margin-top:3px">
-      Your link skips the waitlist. Each friend who subscribes earns you
+      Each friend who joins through your link and subscribes earns you
       <span class="green">+20% quota</span> — RAM, storage and services (up to +100%).</div>
   </div>
   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">

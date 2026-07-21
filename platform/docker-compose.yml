@@ -37,6 +37,8 @@ services:
       - RAM_PER_CONTAINER_MB=${RAM_PER_CONTAINER_MB:-768}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "cx-data:/data"

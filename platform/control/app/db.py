@@ -120,6 +120,7 @@ MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)",
     "ALTER TABLE users ADD COLUMN referral_converted INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN paid_until REAL",
+    "ALTER TABLE users ADD COLUMN stripe_customer_id TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)",
 ]
 

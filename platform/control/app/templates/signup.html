@@ -2,31 +2,25 @@
 {% block title %}Sign up — Cicatrixa{% endblock %}
 {% block content %}
 <div style="max-width:400px;margin:60px auto">
-  <div class="lbl-caps">get started</div>
+  <div class="lbl-caps">14-day free trial · no card required</div>
   <h1>Create your <em>account</em></h1>
-  <p class="sub">Your first repo can be live in about two minutes.</p>
+  <p class="sub">Every account starts with 14 days free — full platform, AI medic included.
+    $2.99 / project / month after, only if you stay.</p>
   {% if referrer_email %}
   <div class="card" style="border-color:var(--healed-dim);padding:12px 18px;margin-bottom:14px">
-    <span class="mono" style="color:var(--healed);font-size:13px">✔ invited by {{ referrer_email }} — your 14-day free trial starts now</span>
+    <span class="mono" style="color:var(--healed);font-size:13px">✔ invited by {{ referrer_email }}</span>
   </div>
   {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  {% if invalid %}
-  <p class="muted mono" style="font-size:13px">
-    <a href="/request-access">Request access instead →</a></p>
-  {% else %}
   <form method="post" action="/signup" class="card">
-    {% if invite_token %}<input type="hidden" name="invite_token" value="{{ invite_token }}">{% endif %}
     {% if ref_code %}<input type="hidden" name="ref_code" value="{{ ref_code }}">{% endif %}
     <label>email</label>
-    <input type="email" name="email" required autofocus
-           {% if invite_email %}value="{{ invite_email }}" readonly style="opacity:.75"{% endif %}>
+    <input type="email" name="email" required autofocus autocomplete="email">
     <label>password</label>
-    <input type="password" name="password" minlength="8" required>
-    <div style="margin-top:20px"><button class="btn" style="width:100%">Sign up →</button></div>
+    <input type="password" name="password" minlength="8" required autocomplete="new-password">
+    <div style="margin-top:20px"><button class="btn" style="width:100%">Start free trial →</button></div>
   </form>
   <p class="muted mono" style="font-size:13px;margin-top:16px">
     Already have an account? <a href="/login">Log in</a></p>
-  {% endif %}
 </div>
 {% endblock %}
