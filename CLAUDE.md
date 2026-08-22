@@ -29,14 +29,22 @@ five healing agents. It is the YC demo, not the product. On the server it lives 
 
 ## Live topology
 
+Cloudflare DNS, zone `85494004e4d82090c4c4f618664caace`, registrar Cloudflare, expires 2027-07-17.
+Nothing in this repo can change a DNS record — there is no Cloudflare API call anywhere in it.
+**Check reality before trusting this table:** `dig +short cicatrixa.com`.
+
 ```
-Cloudflare DNS (zone 85494004e4d82090c4c4f618664caace, registrar Cloudflare, expires 2027-07-17)
-  cicatrixa.com      A  -> Vercel          (marketing site)
-  www                    -> Vercel
-  app                A  -> 169.58.36.128   (platform: signup, dashboard, deploys)
-  *                  A  -> 169.58.36.128   (every user app: <slug>.cicatrixa.com)
-  demo               A  -> 169.58.36.128   (self-heal demo, weighted canary)
+                     TARGET                    AS OF 2026-08-22
+  cicatrixa.com      Vercel                    169.58.36.128   ← wrong, this is the outage
+  www                Vercel                    169.58.36.128   ← via the wildcard
+  app                169.58.36.128             169.58.36.128   ← via the wildcard, no explicit record
+  *                  169.58.36.128             169.58.36.128   ✓
+  demo               169.58.36.128             169.58.36.128   ✓
 ```
+
+The apex belongs to Vercel and the wildcard to the VPS. Until the first two rows are cut over in
+the Cloudflare dashboard by hand, `cicatrixa.com` reaches the VPS and the Vercel build — however
+green — serves nobody. `docs/RUNBOOK.md` has the exact records.
 
 VPS 169.58.36.128, `/root/cicatrixa-platform`:
 - **traefik v3.6** — :80 :443 :8080 (dashboard) :9000 (healer UI). Docker provider on `cxnet`,
@@ -70,7 +78,8 @@ freezes every request in the process.
 ## Failure modes seen so far
 
 1. **Domain pointed at the VPS while the site lives on Vercel** → browser timeout, Cloudflare
-   reports 0 requests (DNS-only records bypass Cloudflare entirely). See `docs/RUNBOOK.md`.
+   reports 0 requests (DNS-only records bypass Cloudflare entirely). Open as of 2026-08-22 —
+   it needs a human in the Cloudflare dashboard. See `docs/RUNBOOK.md`.
 2. **`.env` never cut over from the `<ip>.nip.io` bootstrap value** → no router matches the real
    host; HTTPS falls back to Traefik's self-signed cert.
 3. **Two stacks fighting** — the demo stack and the platform stack both wanted the container name
@@ -84,5 +93,12 @@ freezes every request in the process.
 
 - Never point `cicatrixa.com` (apex) at the VPS again — it belongs to Vercel.
 - Never publish host ports on user containers; route by Traefik label.
-- Verify a deploy by hitting `/healthz` through Traefik, not by "compose said OK".
+- Verify a deploy by hitting `/healthz` through Traefik **over HTTPS**, not by "compose said OK".
+  A 3xx from `:80` proves nothing — a redirect to a `:443` that cannot answer is the outage.
+- `BASE_URL` must be `https://app.cicatrixa.com`, never the apex: it builds the GitHub App
+  callback, referral invite links and the Stripe checkout return URL. Point those at the static
+  Vercel page and GitHub install, invites and billing all break silently.
+- The healer rewrites `traefik/dynamic/dynamic.yml` wholesale on every canary step
+  (`healer/deployer.py:_write_weights`). Anything hand-edited into that file must also be
+  emitted there or it survives only until the next heal.
 - Secrets live only in `platform/.env` on the server. `.env.example` is the template.

@@ -5,6 +5,11 @@
 **Symptom:** browser says *"cicatrixa.com took too long to respond."* Vercel reports the
 deployment Ready. Cloudflare reports **0 requests / 0 unique visitors** over 24h.
 
+Vercel's *Ready* is a build status, not a domain status. The screen that would have shown this
+is **Vercel → Project → Settings → Domains**, where `cicatrixa.com` reads *Invalid
+Configuration* (or is absent). A finished build and a domain that points at you are
+independent facts; only the first was true.
+
 **Diagnosis:**
 
 ```
@@ -35,6 +40,12 @@ Cloudflare → `cicatrixa.com` → **DNS** → Records.
 | **edit/add** | CNAME | `www` | `cname.vercel-dns.com` | **DNS only** (grey) |
 | **add** (so the platform keeps working) | A | `app` | `169.58.36.128` | DNS only |
 | **leave alone** | A | `*` | `169.58.36.128` | DNS only |
+
+The `app` row matters: today `app.cicatrixa.com` resolves only through the wildcard, so it would
+follow the wildcard anywhere you later move it. Add the explicit record before touching the apex.
+
+Verify with `dig +short cicatrixa.com` — it must stop returning `169.58.36.128`, and
+`dig +short www.cicatrixa.com` must return Vercel's CNAME target rather than the wildcard's A.
 
 Then in Vercel → the project → **Settings → Domains** → add `cicatrixa.com` and
 `www.cicatrixa.com`. Use whatever record values that page shows if they differ from the two
@@ -115,7 +126,9 @@ docker compose --profile standalone up -d # local dev only, never on the server
 
 - `deploy.sh` now refuses to deploy with a placeholder `BASE_DOMAIN`, creates the `healnet`
   network if missing, and curls `/healthz` through Traefik before declaring success.
-- `HTTPS_REDIRECT=0` in `.env` keeps plain HTTP serving if a certificate ever fails to issue,
-  so a TLS problem degrades instead of blacking the site out.
+- `HTTPS_REDIRECT_MW=cx-plain` in `.env` keeps plain HTTP serving if a certificate ever fails
+  to issue, so a TLS problem degrades instead of blacking the site out. The redirect is also a
+  302 now, not a 301 — a permanent redirect to a dead `:443` is cached by browsers forever, so
+  flipping the switch afterwards would not rescue anyone who had already visited.
 - Uptime check: point any monitor at `https://app.cicatrixa.com/healthz` and
   `https://cicatrixa.com`.

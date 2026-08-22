@@ -68,7 +68,10 @@ services:
       - "traefik.http.routers.cx-control-fallback.service=cx-control"
       - "traefik.http.services.cx-control.loadbalancer.server.port=8090"
       - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=true"
+      # 302, not 301: a permanent redirect to a :443 that cannot answer is cached by
+      # browsers indefinitely, so flipping HTTPS_REDIRECT_MW later would not rescue
+      # anyone who already visited.
+      - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=false"
       # HTTPS_REDIRECT_MW=cx-plain swaps the redirect for a harmless middleware, so a
       # certificate that fails to issue degrades to plain HTTP instead of blacking out
       # the site (an unreachable :443 behind a permanent redirect looks like a timeout).

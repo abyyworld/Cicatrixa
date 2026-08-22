@@ -40,6 +40,11 @@ services:
       # host path of ./app, derived automatically — run compose from the repo root
       - HOST_APP_SRC=${PWD}/app
       - APPROVAL_MODE=${APPROVAL_MODE:-off}
+      # Router rule/priority the healer re-emits into traefik/dynamic/dynamic.yml on
+      # every canary step. On the production server set DEMO_ROUTER_RULE to
+      # Host(`demo.cicatrixa.com`) so the demo cannot catch platform traffic.
+      - DEMO_ROUTER_RULE=${DEMO_ROUTER_RULE:-PathPrefix(`/`)}
+      - DEMO_ROUTER_PRIORITY=${DEMO_ROUTER_PRIORITY:-1}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "./app:/workspace/app"
