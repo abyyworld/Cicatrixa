@@ -29,7 +29,12 @@ Requirements: Docker + Docker Compose, an OpenAI API key. One env var, two comma
 
 ```bash
 cp .env.example .env       # set OPENAI_API_KEY — that's the only required setting
-docker compose up --build  # run from the repo root
+
+# run from the repo root. The profile + overlay publish the host ports; they exist
+# so this stack can also run on the production server, where the Cicatrixa platform's
+# own Traefik already owns :80/:8080/:9000 and routes the demo through its file provider.
+docker compose --profile standalone \
+  -f docker-compose.yml -f docker-compose.standalone.yml up --build
 ```
 
 - **http://localhost:9000** — self-healer dashboard (watch the pipeline live)

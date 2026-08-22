@@ -7,7 +7,7 @@ networks:
 services:
   traefik:
     image: traefik:v3.6
-    container_name: traefik
+    container_name: cx-traefik
     ports:
       - "80:80"       # platform UI + all user project subdomains
       - "443:443"     # HTTPS once a router references certResolver: le
@@ -35,6 +35,7 @@ services:
       - DEFAULT_QUOTA_RAM_MB=${DEFAULT_QUOTA_RAM_MB:-2048}
       - DEFAULT_QUOTA_DISK_MB=${DEFAULT_QUOTA_DISK_MB:-5120}
       - RAM_PER_CONTAINER_MB=${RAM_PER_CONTAINER_MB:-768}
+      - CPU_PER_CONTAINER=${CPU_PER_CONTAINER:-0.25}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -44,22 +45,34 @@ services:
       - "cx-data:/data"
     networks: [cxnet]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=cxnet"
       - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control.entrypoints=web"
       - "traefik.http.routers.cx-control.service=cx-control"
-      - "traefik.http.routers.cx-control.middlewares=cx-to-https"
+      - "traefik.http.routers.cx-control.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https}"
       # catch-all so the bare IP (no Host match) also lands on the platform UI (HTTP only —
       # a bare IP can't hold a valid cert, so this one is never redirected)
       - "traefik.http.routers.cx-control-fallback.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.cx-control-fallback.priority=1"
+      # priority 5 keeps the platform above the demo's PathPrefix(`/`) catch-all,
+      # which the file provider contributes at priority 1
+      - "traefik.http.routers.cx-control-fallback.priority=5"
       - "traefik.http.routers.cx-control-fallback.entrypoints=web"
       - "traefik.http.routers.cx-control-fallback.service=cx-control"
       - "traefik.http.services.cx-control.loadbalancer.server.port=8090"
       - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
       - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=true"
+      # HTTPS_REDIRECT_MW=cx-plain swaps the redirect for a harmless middleware, so a
+      # certificate that fails to issue degrades to plain HTTP instead of blacking out
+      # the site (an unreachable :443 behind a permanent redirect looks like a timeout).
+      - "traefik.http.middlewares.cx-plain.compress=true"
       # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
       - "traefik.http.routers.cx-control-secure.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control-secure.entrypoints=websecure"
