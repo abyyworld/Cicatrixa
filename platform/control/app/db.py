@@ -1,4 +1,5 @@
 """SQLite storage for the Cicatrixa platform control plane."""
+import contextlib
 import os
 import sqlite3
 import threading
@@ -115,7 +116,23 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-MIGRATIONS = [
+# ---------------------------------------------------------------------------
+# Schema versioning
+#
+# Everything below LEGACY_BASELINE predates versioning: a flat list of DDL run
+# inside `except sqlite3.OperationalError: pass`. That swallow cannot tell "this
+# column already exists" from "this migration is broken", which on a
+# customer-facing database is a silent corruption hazard. It is kept only to
+# reach the same shape on databases that already ran it.
+#
+# Everything from LEGACY_BASELINE + 1 onwards goes through migrate(): ordered,
+# transactional, reversible, and it RAISES. Add new schema there, never below.
+# ---------------------------------------------------------------------------
+
+LEGACY_BASELINE = 1
+SCHEMA_VERSION_KEY = "schema_version"
+
+LEGACY_MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN referral_code TEXT",
     "ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)",
     "ALTER TABLE users ADD COLUMN referral_converted INTEGER NOT NULL DEFAULT 0",
@@ -124,24 +141,137 @@ MIGRATIONS = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_referral_code ON users(referral_code)",
 ]
 
+LEGACY_COLUMNS = [
+    ("users", "quota_services", "INTEGER"),
+    ("users", "quota_ram_mb", "INTEGER"),
+    ("users", "quota_disk_mb", "INTEGER"),
+    ("users", "email_verified", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "verify_code", "TEXT"),
+    ("users", "verify_expires", "REAL"),
+    ("services", "api_prefix", "TEXT"),
+]
+
+
+class Migration:
+    """One reversible schema step. `up` and `down` are lists of SQL statements."""
+
+    def __init__(self, version: int, name: str, up: list[str], down: list[str]):
+        if version <= LEGACY_BASELINE:
+            raise ValueError(f"migration version must be > {LEGACY_BASELINE}")
+        self.version, self.name, self.up, self.down = version, name, up, down
+
+    def __repr__(self):
+        return f"<Migration {self.version} {self.name}>"
+
+
+# Ordered, strictly applied. Append only; never edit a shipped migration.
+MIGRATIONS: list[Migration] = []
+
+
+@contextlib.contextmanager
+def _transaction(c: sqlite3.Connection):
+    """A transaction that really covers DDL.
+
+    sqlite3's implicit transactions only open for DML, so a CREATE/ALTER
+    autocommits and cannot be rolled back — which would leave a migration
+    half-applied, the exact failure this runner exists to prevent. Dropping to
+    autocommit and issuing BEGIN ourselves puts the DDL inside the transaction;
+    SQLite itself is fully transactional over schema changes.
+    """
+    previous = c.isolation_level
+    c.isolation_level = None
+    try:
+        c.execute("BEGIN")
+        yield
+    except BaseException:
+        c.execute("ROLLBACK")
+        raise
+    else:
+        c.execute("COMMIT")
+    finally:
+        c.isolation_level = previous
+
+
+def schema_version() -> int:
+    row = one("SELECT value FROM settings WHERE key=?", (SCHEMA_VERSION_KEY,))
+    return int(row["value"]) if row else 0
+
+
+def _set_schema_version(version: int, c: sqlite3.Connection):
+    c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+              (SCHEMA_VERSION_KEY, str(version)))
+
+
+def _pending(target: int | None, migrations: list[Migration]) -> list[Migration]:
+    current = schema_version()
+    ceiling = target if target is not None else max(
+        [m.version for m in migrations] + [current])
+    return sorted((m for m in migrations if current < m.version <= ceiling),
+                  key=lambda m: m.version)
+
+
+def migrate(target: int | None = None, migrations: list[Migration] | None = None) -> int:
+    """Apply pending migrations in order. Each runs in its own transaction and
+    raises on failure, leaving schema_version at the last step that fully
+    succeeded — so a broken migration is loud and the database is not half-done."""
+    migrations = MIGRATIONS if migrations is None else migrations
+    for m in _pending(target, migrations):
+        c = conn()
+        try:
+            with _transaction(c):
+                for stmt in m.up:
+                    c.execute(stmt)
+                _set_schema_version(m.version, c)
+        except Exception as exc:
+            raise RuntimeError(
+                f"migration {m.version} ({m.name}) failed and was rolled back: {exc}"
+            ) from exc
+    return schema_version()
+
+
+def migrate_down(target: int, migrations: list[Migration] | None = None) -> int:
+    """Roll back to `target`, newest first. Same transaction and failure rules."""
+    migrations = MIGRATIONS if migrations is None else migrations
+    current = schema_version()
+    doomed = sorted((m for m in migrations if target < m.version <= current),
+                    key=lambda m: m.version, reverse=True)
+    for m in doomed:
+        c = conn()
+        try:
+            with _transaction(c):
+                for stmt in m.down:
+                    c.execute(stmt)
+                _set_schema_version(m.version - 1, c)
+        except Exception as exc:
+            raise RuntimeError(
+                f"rollback of migration {m.version} ({m.name}) failed: {exc}"
+            ) from exc
+    return schema_version()
+
 
 def init():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn().executescript(SCHEMA)
-    for stmt in MIGRATIONS:
+    _apply_legacy()
+    if schema_version() < LEGACY_BASELINE:
+        # Fresh database, or one created before versioning existed: both are at
+        # the legacy shape once _apply_legacy has run, so stamp them there.
+        c = conn()
+        with _transaction(c):
+            _set_schema_version(LEGACY_BASELINE, c)
+    migrate()
+
+
+def _apply_legacy():
+    """Pre-versioning DDL. Tolerant by necessity — it has no record of what ran."""
+    for stmt in LEGACY_MIGRATIONS:
         try:
             conn().execute(stmt)
             conn().commit()
         except sqlite3.OperationalError:
             pass  # column/index already exists
-    # additive migrations for databases created before these columns existed
-    for table, col, ctype in (("users", "quota_services", "INTEGER"),
-                              ("users", "quota_ram_mb", "INTEGER"),
-                              ("users", "quota_disk_mb", "INTEGER"),
-                              ("users", "email_verified", "INTEGER NOT NULL DEFAULT 0"),
-                              ("users", "verify_code", "TEXT"),
-                              ("users", "verify_expires", "REAL"),
-                              ("services", "api_prefix", "TEXT")):
+    for table, col, ctype in LEGACY_COLUMNS:
         try:
             conn().execute(f"ALTER TABLE {table} ADD COLUMN {col} {ctype}")
         except sqlite3.OperationalError:

@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import time
 
-from . import ai, bus, db, engine, gh
+from . import ai, bus, db, engine, gh, patching
 
 PUSH_ROOT = os.environ.get("PUSH_ROOT", "/data/push")
 AGENT_NAME = "Cicatrixa Agent"
@@ -181,7 +181,7 @@ def _verify_patches(patches: list[dict], service, workdirs: dict) -> list[dict]:
             src = open(full, errors="replace").read()
         except OSError:
             continue
-        if patch["find"] in src:
+        if patching.check(src, patch) is patching.OK:
             verified.append(patch)
     return verified
 
@@ -232,11 +232,12 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             except OSError:
                 status(f"⚠ {rel}: file not found — skipping this patch")
                 continue
-            if patch["find"] not in src:
-                status(f"⚠ {rel}: expected code not found (repo changed?) — skipping")
+            reason = patching.check(src, patch)
+            if reason is not None:
+                status(f"⚠ {rel}: {reason} — skipping this patch")
                 continue
             with open(full, "w") as f:
-                f.write(src.replace(patch["find"], patch.get("replace") or ""))
+                f.write(patching.apply(src, patch))
             applied += 1
         if not applied:
             return None, "No patch could be applied — the repository has likely changed."
