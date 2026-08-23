@@ -1,7 +1,12 @@
 http:
   routers:
     orders:
+      # Lowest possible priority: on the demo box alone this still catches everything,
+      # but on the platform server it can never swallow traffic meant for cx-control
+      # or a user app. (Traefik v3 defaults an unset priority to the rule's length,
+      # which would have put this catch-all above the platform's own fallback.)
       rule: "PathPrefix(`/`)"
+      priority: 1
       entryPoints: [web]
       service: orders-weighted
   services:

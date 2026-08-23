@@ -1,0 +1,10 @@
+# Local-only overlay for the self-heal demo: publishes the healer dashboard on the
+# host. Never use this on the production server — the platform's Traefik (cx-traefik)
+# already binds :9000 there and would lose the port race.
+#
+#   docker compose --profile standalone \
+#     -f docker-compose.yml -f docker-compose.standalone.yml up --build
+services:
+  healer:
+    ports:
+      - "9000:9000"   # self-healer dashboard (SSE)

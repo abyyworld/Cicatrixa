@@ -153,6 +153,11 @@ class Deployer:
                 "routers": {
                     "orders": {
                         "rule": os.environ.get("DEMO_ROUTER_RULE", "PathPrefix(`/`)"),
+                        # This file is rewritten on every canary step, so the priority has
+                        # to be re-emitted here or the first heal silently restores Traefik's
+                        # default (the rule's length), putting this catch-all back above the
+                        # Cicatrixa platform's own fallback router on the shared server.
+                        "priority": int(os.environ.get("DEMO_ROUTER_PRIORITY", "1")),
                         "entryPoints": ["web"],
                         "service": "orders-weighted",
                     }

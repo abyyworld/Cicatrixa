@@ -1,4 +1,11 @@
 {
   "outputDirectory": "site",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "app.cicatrixa.com" }],
+      "destination": "/app-status"
+    }
+  ]
 }

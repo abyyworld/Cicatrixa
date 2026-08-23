@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cicatrixa Control Plane — private beta</title>
+<meta name="description" content="The Cicatrixa control plane is in private beta. Watch the self-healing pipeline run end to end, and request access.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta name="robots" content="noindex">
+<meta property="og:title" content="Cicatrixa Control Plane — private beta">
+<meta property="og:description" content="Detect, diagnose, reproduce as a failing test, patch until green, ship through a canary.">
+<meta property="og:url" content="https://app.cicatrixa.com">
+<meta property="og:type" content="website">
+</head>
+<body>
+<style>
+  :root{
+    --bg:#0A0F0C; --panel:#101713; --ink:#E4EEE7; --muted:#74857B;
+    --line:#1F2B24; --red:#FF5257; --green:#40D967; --green-dim:#2C7A45;
+    --amber:#E5A63C;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink)}
+  body{font-family:Georgia,'Times New Roman',serif;line-height:1.6;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1020px;margin:0 auto;padding:0 24px}
+  a{color:inherit}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  header{border-bottom:1px solid var(--line);padding:22px 0}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;
+               flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:11px;text-decoration:none;font-size:19px;
+         letter-spacing:.01em}
+  .mark{width:26px;height:26px;flex-shrink:0}
+  .back{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--muted);
+        text-decoration:none;border:1px solid var(--line);border-radius:99px;
+        padding:7px 15px;transition:color .2s,border-color .2s}
+  .back:hover,.back:focus-visible{color:var(--green);border-color:var(--green-dim)}
+
+  .hero{padding:74px 0 54px;border-bottom:1px solid var(--line)}
+  .status{display:inline-flex;align-items:center;gap:9px;font-family:ui-monospace,Menlo,monospace;
+          font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--amber);
+          border:1px solid #3A2E15;background:#181206;border-radius:99px;padding:6px 15px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--amber);flex-shrink:0;
+       animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  h1{font-size:clamp(31px,5.1vw,49px);line-height:1.14;margin:26px 0 0;font-weight:400;
+     letter-spacing:-.015em}
+  .lede{font-size:19px;color:var(--muted);max-width:62ch;margin:20px 0 0}
+  .lede strong{color:var(--ink);font-weight:400}
+  .ctas{display:flex;gap:13px;flex-wrap:wrap;margin-top:34px}
+  .cta{font-family:ui-monospace,Menlo,monospace;font-size:14px;text-decoration:none;
+       border-radius:99px;padding:12px 23px;border:1px solid var(--green-dim);
+       color:#06130A;background:var(--green);transition:opacity .2s}
+  .cta:hover{opacity:.87}
+  .cta2{font-family:ui-monospace,Menlo,monospace;font-size:14px;text-decoration:none;
+        border-radius:99px;padding:12px 23px;border:1px solid var(--line);color:var(--muted);
+        transition:color .2s,border-color .2s}
+  .cta2:hover,.cta2:focus-visible{color:var(--green);border-color:var(--green-dim)}
+
+  section{padding:60px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:15px;font-family:ui-monospace,Menlo,monospace;font-weight:400;
+     letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 26px}
+  figure{margin:0}
+  video,figure img{width:100%;display:block;border:1px solid var(--line);border-radius:11px;
+                   background:#000}
+  figcaption{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--muted);
+             margin-top:13px;line-height:1.55}
+
+  .steps{list-style:none;margin:0;padding:0;display:grid;gap:1px;background:var(--line);
+         border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .steps li{background:var(--panel);padding:19px 22px;display:flex;gap:17px;align-items:flex-start}
+  .steps .n{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--green);
+            border:1px solid var(--green-dim);border-radius:6px;padding:2px 8px;flex-shrink:0;
+            margin-top:3px}
+  .steps b{font-weight:400;display:block}
+  .steps span{color:var(--muted);font-size:15.5px}
+
+  .honest{background:var(--panel);border:1px solid var(--line);border-radius:11px;
+          padding:26px 28px}
+  .honest p{margin:0 0 13px;color:var(--muted);font-size:16px}
+  .honest p:last-child{margin-bottom:0}
+  .honest code{font-family:ui-monospace,Menlo,monospace;font-size:13.5px;color:var(--ink);
+               background:#0A0F0C;border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  .lvl{display:grid;gap:1px;background:var(--line);border:1px solid var(--line);
+       border-radius:9px;overflow:hidden;margin:20px 0 0}
+  .lvl div{background:#0A0F0C;padding:12px 17px;font-family:ui-monospace,Menlo,monospace;
+           font-size:13px;color:var(--muted)}
+  .lvl div b{font-weight:400;color:var(--ink)}
+  .lvl .up{color:var(--green)}
+
+  footer{padding:44px 0 66px;color:var(--muted);font-size:14px}
+  footer a{color:var(--muted);text-decoration:none}
+  footer a:hover{color:var(--green)}
+  @media (max-width:620px){ .hero{padding:52px 0 40px} section{padding:44px 0} }
+</style>
+
+<header><div class="wrap">
+  <a class="brand" href="https://cicatrixa.com">
+    <svg class="mark" viewBox="0 0 512 512" aria-hidden="true">
+      <rect width="512" height="512" rx="104" fill="#101713"/>
+      <path d="M150 150 L256 256" stroke="#FF5257" stroke-width="36" stroke-linecap="round"/>
+      <path d="M256 256 L362 362" stroke="#40D967" stroke-width="36" stroke-linecap="round"/>
+      <g stroke="#c9d1d9" stroke-width="17" stroke-linecap="round">
+        <path d="M168 216 L216 168"/><path d="M211 259 L259 211"/>
+        <path d="M253 301 L301 253"/><path d="M296 344 L344 296"/></g>
+    </svg>
+    Cicatrixa
+  </a>
+  <a class="back" href="https://cicatrixa.com">cicatrixa.com →</a>
+</div></header>
+
+<div class="hero"><div class="wrap">
+  <span class="status"><span class="dot"></span>Control plane · private beta</span>
+  <h1>The hosted control plane<br>is invite-only right now.</h1>
+  <p class="lede">This is <strong>app.cicatrixa.com</strong> — where you connect GitHub, pick a repo,
+    and let the agent deploy and keep it alive. It is not open to the public yet.
+    Below is the pipeline running end to end on a real service, unedited.</p>
+  <div class="ctas">
+    <a class="cta" href="mailto:kenny09077@gmail.com?subject=Cicatrixa%20access">Request access</a>
+    <a class="cta2" href="#pipeline">Watch it heal</a>
+  </div>
+</div></div>
+
+<section id="pipeline"><div class="wrap">
+  <h2>Recorded run — crash to shipped fix</h2>
+  <figure>
+    <video controls preload="metadata" poster="/demo-final-state.png" playsinline>
+      <source src="/demo-self-heal.mp4" type="video/mp4">
+      Your browser cannot play this video.
+      <a href="/demo-self-heal.mp4">Download it instead.</a>
+    </video>
+    <figcaption>A real run against a live order service with a seeded division-by-zero.
+      Nothing is sped up or re-cut. The agent detects the error spike, pins the root cause to a
+      line, writes a test that <em>fails</em> on the current code, patches until that test passes
+      and the existing suite stays green, then shifts traffic 20% → 100% on Traefik.</figcaption>
+  </figure>
+</div></section>
+
+<section><div class="wrap">
+  <h2>What it does, in order</h2>
+  <ol class="steps">
+    <li><span class="n">01</span><span><b>Detect</b>Tails container logs and polls health.
+      Three errors in a thirty-second window, or three failed health checks, trips it.</span></li>
+    <li><span class="n">02</span><span><b>Diagnose</b>Traceback plus an index of the source goes to
+      a reasoning model, which returns a structured root cause — file, exact line, and an input
+      that triggers it.</span></li>
+    <li><span class="n">03</span><span><b>Reproduce</b>Writes a test and runs it in a throwaway
+      container to confirm it <em>fails</em> on the current code. No reproduction, no patch —
+      the pipeline stops here rather than guessing.</span></li>
+    <li><span class="n">04</span><span><b>Fix</b>Iterates a patch until the reproduction passes and
+      the existing suite stays green. Both checked in ephemeral containers, never on the live
+      service.</span></li>
+    <li><span class="n">05</span><span><b>Ship</b>Builds the patched image and moves 20% of traffic
+      to it. Watches error rate for the window, then promotes to 100% or rolls back. The old
+      version stays at weight zero as an instant undo.</span></li>
+  </ol>
+</div></section>
+
+<section><div class="wrap">
+  <h2>What we will not claim</h2>
+  <div class="honest">
+    <p>A passing test suite is not proof that a fix works. If no test executes the lines a patch
+      changed, a green suite only shows the patch broke nothing that was already covered — which
+      is exactly what a confidently wrong patch looks like.</p>
+    <p>So every fix is recorded at the level its evidence supports, and no higher. Coverage is
+      intersected against the specific lines changed. The level is computed from the run, never
+      asserted by the thing that wants it to be high.</p>
+    <div class="lvl">
+      <div><b>unverified_no_coverage</b> — the default, and a legitimate place to stop</div>
+      <div class="up"><b>verified_existing_tests</b> — suite green <em>and</em> your tests execute the changed lines</div>
+      <div class="up"><b>verified_reproduction</b> — a test that failed before the patch and passes after</div>
+      <div class="up"><b>verified_merged_stable</b> — merged, and stable in production since</div>
+    </div>
+    <p style="margin-top:20px">If we could not prove it, we say so. That is the whole product.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <a href="https://cicatrixa.com">cicatrixa.com</a> ·
+  <a href="mailto:kenny09077@gmail.com">kenny09077@gmail.com</a>
+</div></footer>
+</body>
+</html>

@@ -39,6 +39,16 @@ then hit "Install & choose repos" and use GitHub's native repo picker; push webh
 flow with no per-repo setup. Fallback: paste a PAT (fine-grained `Contents: read` +
 `Metadata`, or classic `repo`).
 
+## Tests
+
+```bash
+cd platform/control
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+Kept out of the runtime image on purpose — `requirements.txt` is what ships.
+
 ## Deploy
 
 ```bash

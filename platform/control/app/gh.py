@@ -72,8 +72,13 @@ def build_manifest(base_url: str) -> dict:
         "setup_url": f"{base_url}/connect/github/setup",
         "setup_on_update": False,
         "public": True,
-        "default_permissions": {"contents": "write", "metadata": "read"},
-        "default_events": ["push"],
+        # pull_requests:write is what PR mode needs. GitHub keeps EXISTING
+        # installations on the permissions they already accepted, so adding it
+        # here changes nothing for current users until they choose to update —
+        # which is exactly the rollout we want.
+        "default_permissions": {"contents": "write", "metadata": "read",
+                                "pull_requests": "write"},
+        "default_events": ["push", "pull_request"],
     }
 
 
@@ -186,6 +191,67 @@ def clone_url(connection, repo_full: str) -> str:
 
 
 # ---------- webhooks ----------
+
+class NoPullRequestPermission(Exception):
+    """The installation predates pull_requests:write, or the PAT lacks the scope.
+    Callers fall back to pushing to the branch rather than failing the fix."""
+
+
+def open_pull_request(connection, repo_full: str, *, head: str, base: str,
+                      title: str, body: str) -> dict:
+    """Open a PR and return {number, url, html_url}. Raises
+    NoPullRequestPermission when the credential cannot, so the caller can fall
+    back instead of losing the fix."""
+    token = conn_token(connection)
+    r = httpx.post(f"{API}/repos/{repo_full}/pulls",
+                   headers={"Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github+json"},
+                   json={"title": title, "body": body, "head": head, "base": base},
+                   timeout=30)
+    if r.status_code in (403, 404):
+        raise NoPullRequestPermission(
+            f"GitHub refused to open a pull request ({r.status_code}). The "
+            f"installation needs the 'Pull requests: write' permission.")
+    if r.status_code == 422:
+        # Most often: no diff between head and base, or the PR already exists.
+        raise NoPullRequestPermission(
+            f"GitHub rejected the pull request: {r.text[:200]}")
+    r.raise_for_status()
+    data = r.json()
+    return {"number": data["number"], "url": data["html_url"],
+            "html_url": data["html_url"]}
+
+
+def parse_pull_request(body: bytes) -> dict | None:
+    """Extract what the flywheel needs from a `pull_request` webhook."""
+    try:
+        payload = json.loads(body)
+        pr = payload["pull_request"]
+        merged = bool(pr.get("merged"))
+        state = "merged" if merged else pr.get("state", "open")
+        return {"action": payload.get("action", ""),
+                "repo_full": payload["repository"]["full_name"],
+                "number": pr["number"],
+                "branch": (pr.get("head") or {}).get("ref", ""),
+                "state": state,
+                "merged_at": pr.get("merged_at")}
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def push_commit_authors(body: bytes) -> list[str]:
+    """Author emails of the commits in a push event, lowercased."""
+    try:
+        payload = json.loads(body)
+        out = []
+        for commit in payload.get("commits") or []:
+            email = ((commit.get("author") or {}).get("email")
+                     or (commit.get("committer") or {}).get("email") or "")
+            out.append(email.lower())
+        return out
+    except (TypeError, json.JSONDecodeError):
+        return []
+
 
 def verify_webhook(secret: str, signature: str | None, body: bytes) -> bool:
     if not secret:

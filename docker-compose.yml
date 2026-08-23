@@ -3,9 +3,16 @@ networks:
     name: healnet
 
 services:
+  # Local demo only. On the production server the PLATFORM's Traefik (cx-traefik)
+  # already owns :80/:443/:8080/:9000 and routes the demo through its file provider,
+  # so this service must not start there — it would lose the port race and, before
+  # the rename, would also have collided on the container name `traefik`.
+  #   local:  docker compose --profile standalone up
+  #   server: docker compose up          (traefik + healer ports stay down)
   traefik:
+    profiles: [standalone]
     image: traefik:v3.1
-    container_name: traefik
+    container_name: demo-traefik
     ports:
       - "80:80"       # live traffic (weighted stable/canary)
       - "8080:8080"   # traefik dashboard
@@ -25,17 +32,23 @@ services:
   healer:
     build: ./healer
     container_name: healer
-    ports:
-      - "9000:9000"   # self-healer dashboard (SSE)
+    # No host port here: on the server the platform's Traefik already owns :9000
+    # and serves this dashboard behind basic-auth. docker-compose.standalone.yml
+    # publishes it for local runs.
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       # host path of ./app, derived automatically — run compose from the repo root
       - HOST_APP_SRC=${PWD}/app
       - APPROVAL_MODE=${APPROVAL_MODE:-off}
+      # Router rule/priority the healer re-emits into traefik/dynamic/dynamic.yml on
+      # every canary step. On the production server set DEMO_ROUTER_RULE to
+      # Host(`demo.cicatrixa.com`) so the demo cannot catch platform traffic.
+      - DEMO_ROUTER_RULE=${DEMO_ROUTER_RULE:-PathPrefix(`/`)}
+      - DEMO_ROUTER_PRIORITY=${DEMO_ROUTER_PRIORITY:-1}
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "./app:/workspace/app"
       - "./traefik/dynamic:/traefik-dynamic"
     networks: [healnet]
-    depends_on: [app-stable, traefik]
+    depends_on: [app-stable]
     restart: unless-stopped
