@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import time
 
-from . import ai, bus, db, engine, gh, patching
+from . import ai, bus, db, engine, gh, patching, verify
 
 PUSH_ROOT = os.environ.get("PUSH_ROOT", "/data/push")
 AGENT_NAME = "Cicatrixa Agent"
@@ -186,6 +186,54 @@ def _verify_patches(patches: list[dict], service, workdirs: dict) -> list[dict]:
     return verified
 
 
+def _verify_fix(clone: str, changed: dict, image: str | None, status) -> dict:
+    """Run the repo's own suite against the patched tree and report honestly.
+
+    Never raises: verification failing must degrade the claim, not block a fix
+    or break the push. A failure here means we learned nothing, which is
+    unverified_no_coverage — the same as having no tests.
+    """
+    result = {"level": verify.UNVERIFIED, "detail": "", "suite_ran": False}
+    try:
+        if not changed:
+            result["detail"] = "no files changed"
+            return result
+        if not verify.detect_pytest(clone):
+            status("🧪 no Python test suite in this repo — recording the fix as "
+                   "unverified (no coverage)")
+            result["detail"] = "no pytest suite detected"
+            return result
+        if not image:
+            result["detail"] = "no image available to run the suite in"
+            return result
+
+        status("🧪 running your test suite against the patched code…")
+        evidence = verify.collect(clone, changed, run=engine.test_runner(image, clone))
+        level = verify.level_for(evidence)
+        verify.assert_supported(level, evidence)   # belt and braces
+
+        covered = evidence.covered_changed_lines()
+        result.update(level=level, suite_ran=evidence.suite_ran,
+                      suite_passed=evidence.suite_passed,
+                      changed_lines={k: sorted(v) for k, v in evidence.changed_lines.items()},
+                      covered_changed_lines={k: sorted(v) for k, v in covered.items()})
+        if not evidence.suite_passed:
+            status("🧪 the suite does not pass on the patched code — recording as "
+                   "unverified")
+        elif level == verify.UNVERIFIED:
+            status("🧪 suite green, but no test exercises the lines we changed — "
+                   "recording as unverified (no coverage), not as verified")
+        else:
+            n = sum(len(v) for v in covered.values())
+            status(f"✅ suite green and {n} of the changed line(s) are exercised by "
+                   f"your tests — recorded as {level}")
+        result["detail"] = f"suite_passed={evidence.suite_passed}"
+    except Exception as exc:
+        status(f"🧪 could not run the suite ({str(exc)[:200]}) — recording as unverified")
+        result["detail"] = f"verification error: {str(exc)[:300]}"
+    return result
+
+
 # ---------- apply: patch -> verify build -> commit -> push -> redeploy ----------
 
 def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
@@ -218,6 +266,7 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             return None, f"Clone failed: {r.stderr.strip()[-300:]}"
 
         applied = 0
+        changed: dict[str, tuple[str, str]] = {}
         for patch in data["patches"]:
             rel = patch["file"].lstrip("/")
             # tolerate a service-name prefix the AI sometimes adds
@@ -236,8 +285,10 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             if reason is not None:
                 status(f"⚠ {rel}: {reason} — skipping this patch")
                 continue
+            patched = patching.apply(src, patch)
             with open(full, "w") as f:
-                f.write(patching.apply(src, patch))
+                f.write(patched)
+            changed[rel] = (src, patched)
             applied += 1
         if not applied:
             return None, "No patch could be applied — the repository has likely changed."
@@ -259,6 +310,13 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             except RuntimeError as exc:
                 return None, ("The patched code fails to build — not pushing. "
                               f"Build error: {str(exc)[-400:]}")
+
+        # The build proves it compiles. Only the suite — and only coverage of the
+        # lines we actually changed — proves the fix does anything.
+        verification = _verify_fix(clone, changed,
+                                   f"cx-{service['slug']}:chatfix-verify"
+                                   if dockerfile else None, status)
+        data["verification"] = verification
 
         msg_line = data.get("commit_message") or f"Cicatrixa: fix {service['name']}"
         env = {**os.environ, "GIT_AUTHOR_NAME": AGENT_NAME,

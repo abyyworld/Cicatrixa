@@ -22,6 +22,8 @@ BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
 HTTPS_ENABLED = BASE_URL.startswith("https://")
 NETWORK = os.environ.get("CX_NETWORK", "cxnet")
 WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
+# Named volume backing /data — mounted into ephemeral test containers.
+DATA_VOLUME = os.environ.get("CX_DATA_VOLUME", "cx-data")
 MAX_ATTEMPTS = 3
 COMMON_PORTS = [3000, 8000, 8080, 5000, 80, 4000, 8501, 5173, 9000, 3001]
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
@@ -313,6 +315,40 @@ def _build(workdir: str, dockerfile: str, tag: str, log, buildargs: dict | None 
             out.append(chunk["errorDetail"].get("message", ""))
             raise RuntimeError("\n".join(out[-30:]))
     return "\n".join(out)
+
+
+def test_runner(image: str, workdir: str, timeout: int = 600):
+    """A callable that runs one shell command inside `image` and returns
+    (exit_code, output) — what verify.collect() needs to execute a customer's
+    suite.
+
+    The clone lives under /data, which is the cx-data named volume, so the
+    volume is mounted by name: a bind mount of the control plane's own path
+    would be resolved by the host daemon and point at nothing.
+
+    entrypoint="" because the image is the customer's app — its ENTRYPOINT would
+    start their server instead of pytest. The same RAM/CPU caps as a user
+    container apply, so a runaway suite cannot take the host down.
+    """
+    def run(command: str) -> tuple[int, str]:
+        container = dock().containers.run(
+            image, entrypoint="", command=["sh", "-lc", command],
+            volumes={DATA_VOLUME: {"bind": "/data", "mode": "rw"}},
+            working_dir=workdir,
+            mem_limit=f"{RAM_PER_CONTAINER_MB}m",
+            nano_cpus=int(CPU_PER_CONTAINER * 1e9),
+            detach=True,
+        )
+        try:
+            result = container.wait(timeout=timeout)
+            return (result.get("StatusCode", 1),
+                    container.logs().decode("utf-8", errors="replace"))
+        finally:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+    return run
 
 
 def _labels(service, port: int, plan: dict | None = None) -> dict:

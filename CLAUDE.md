@@ -62,7 +62,9 @@ VPS 169.58.36.128, `/root/cicatrixa-platform`:
 | `ai.py` | OpenAI Responses API: writes Dockerfiles, diagnoses failures, smoke-test verdicts. Falls back to node/python/go/static heuristics with no API key |
 | `watchdog.py` | 3 loops: GitHub poll (180s), container health (60s, restart ×2 then rebuild), metrics (60s) |
 | `medic.py` | chat medic — investigates, proposes patches, verifies them against the real file before offering Apply |
-| `db.py` | SQLite schema + additive migrations. `conn()` is thread-local |
+| `patching.py` | find/replace application. A patch applies only if `find` occurs **exactly once** — ambiguity is refused, never guessed |
+| `verify.py` | verification evidence and the levels it supports. `level_for()` computes the level; callers never assert one. A green suite with no coverage of the changed lines is `unverified_no_coverage` |
+| `db.py` | SQLite schema + versioned migrations (`schema_version` in `settings`, explicit up/down, raises on failure). `conn()` is thread-local |
 | `auth.py` `gh.py` `billing.py` `invites.py` `referrals.py` `mailer.py` `metrics.py` `dbprovision.py` `bus.py` | scrypt+signed cookies / GitHub App+PAT / Stripe / invite gate / referral quota / Resend / cgroup usage / on-demand Postgres / SSE pub-sub |
 
 Conventions: blocking work goes through `asyncio.to_thread`; background threads reach the loop
@@ -102,3 +104,8 @@ freezes every request in the process.
   (`healer/deployer.py:_write_weights`). Anything hand-edited into that file must also be
   emitted there or it survives only until the next heal.
 - Secrets live only in `platform/.env` on the server. `.env.example` is the template.
+- Never let a caller pick a verification level. `verify.level_for(evidence)` decides;
+  `assert_supported()` raises on anything higher. One dishonest record is permanent and
+  silent, because nothing downstream re-derives it.
+- New schema goes in `db.MIGRATIONS` as a `Migration` with a real `down`. Never in the
+  legacy block — that one still swallows errors and only exists to reach parity on old DBs.
