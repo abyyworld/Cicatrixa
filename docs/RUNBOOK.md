@@ -60,7 +60,25 @@ already issued when traffic arrives.
 
 ## Fix 2 — bring the platform back up (`app.cicatrixa.com`)
 
-Nothing in this repo can do this remotely; it needs a shell on the box.
+`platform/recover.sh` automates all of this. From your laptop:
+
+```bash
+SERVER=root@169.58.36.128 ./platform/recover.sh
+```
+
+It first establishes whether the box is reachable at all, and only then repairs the
+stack: disk, a stale demo container holding `:80`, the missing `healnet` network, a
+placeholder `BASE_DOMAIN`, then verifies `/healthz` over both HTTP and HTTPS.
+
+**2026-08-23: stage 1 fails.** `ping`, `ssh`, `:80` and `:443` all time out — 100%
+packet loss. Port 22 not answering means this is not a Docker, Traefik or config
+problem; it is the host or the network in front of it. Nothing in this repo, and no
+command run remotely, can reach it. Go to the VPS provider's console and check, in
+this order: instance powered on, **unpaid invoice or suspension**, public IP still
+`169.58.36.128`, security group still allowing 22/80/443. If the console says the
+instance is running, use its web console / VNC / KVM to get a shell without SSH.
+
+The manual sequence, once you have any shell:
 
 ```bash
 ssh root@169.58.36.128
