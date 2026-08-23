@@ -64,6 +64,8 @@ VPS 169.58.36.128, `/root/cicatrixa-platform`:
 | `medic.py` | chat medic — investigates, proposes patches, verifies them against the real file before offering Apply |
 | `patching.py` | find/replace application. A patch applies only if `find` occurs **exactly once** — ambiguity is refused, never guessed |
 | `verify.py` | verification evidence and the levels it supports. `level_for()` computes the level; callers never assert one. A green suite with no coverage of the changed lines is `unverified_no_coverage` |
+| `flywheel.py` | `break_observation` (per incident, tenant-scoped) + `transform` (promoted, tenant-agnostic, **zero customer code** — enforced on write). Library lookup fires *before* generation; unattended-merge-rate and hit-rate queries live here |
+| `fingerprint.py` | libcst structural hash of a call site — identifiers stripped, literals bucketed. Matches the same break across repos without storing anyone's source. Python only |
 | `db.py` | SQLite schema + versioned migrations (`schema_version` in `settings`, explicit up/down, raises on failure). `conn()` is thread-local |
 | `auth.py` `gh.py` `billing.py` `invites.py` `referrals.py` `mailer.py` `metrics.py` `dbprovision.py` `bus.py` | scrypt+signed cookies / GitHub App+PAT / Stripe / invite gate / referral quota / Resend / cgroup usage / on-demand Postgres / SSE pub-sub |
 
@@ -107,5 +109,7 @@ freezes every request in the process.
 - Never let a caller pick a verification level. `verify.level_for(evidence)` decides;
   `assert_supported()` raises on anything higher. One dishonest record is permanent and
   silent, because nothing downstream re-derives it.
+- Promotion to `transform` needs ≥2 observations across ≥2 tenants at `verified_reproduction`
+  or above. `insert_transform` enforces it; nothing promotes automatically yet.
 - New schema goes in `db.MIGRATIONS` as a `Migration` with a real `down`. Never in the
   legacy block — that one still swallows errors and only exists to reach parity on old DBs.

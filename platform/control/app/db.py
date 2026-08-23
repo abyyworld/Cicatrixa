@@ -165,7 +165,77 @@ class Migration:
 
 
 # Ordered, strictly applied. Append only; never edit a shipped migration.
-MIGRATIONS: list[Migration] = []
+MIGRATIONS: list[Migration] = [
+    Migration(
+        2, "flywheel",
+        up=[
+            # Promoted, reusable, tenant-agnostic. Contains no customer code —
+            # see flywheel.insert_transform, which enforces that on write.
+            """CREATE TABLE transform (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                vendor_package           TEXT NOT NULL,
+                applies_to_version_range TEXT,
+                symbol_path              TEXT NOT NULL,
+                break_kind               TEXT NOT NULL,
+                match_pattern            TEXT NOT NULL,   -- JSON libcst matcher spec
+                rewrite_ref              TEXT NOT NULL,   -- dotted name of a codemod in transforms/
+                supporting_observations  TEXT NOT NULL DEFAULT '[]',  -- JSON [{id, level}]
+                confidence_tier          TEXT NOT NULL DEFAULT 'candidate',
+                promoted_at              REAL,
+                created_at               REAL NOT NULL
+            )""",
+            "CREATE INDEX idx_transform_lookup ON transform(vendor_package, symbol_path, break_kind)",
+            # One per incident, tenant-scoped, may contain customer specifics.
+            """CREATE TABLE break_observation (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id               INTEGER NOT NULL REFERENCES users(id),
+                project_id            INTEGER REFERENCES projects(id),
+                service_id            INTEGER REFERENCES services(id),
+                trigger               TEXT NOT NULL DEFAULT 'crash',
+                    -- crash|ci_failure|dependency_bump|drift_watch
+                vendor_package        TEXT,
+                vendor_version_from   TEXT,
+                vendor_version_to     TEXT,
+                symbol_path           TEXT,
+                break_kind            TEXT NOT NULL DEFAULT 'unknown',
+                    -- signature_change|symbol_removed|symbol_moved|return_shape_change
+                    -- |default_changed|behaviour_change|unknown
+                call_site_fingerprint TEXT,
+                library_lookup_result TEXT,               -- hit|miss
+                matched_transform_id  INTEGER REFERENCES transform(id),
+                verification_level    TEXT NOT NULL DEFAULT 'unverified_no_coverage',
+                verification_evidence TEXT,               -- JSON
+                pr_number             INTEGER,
+                pr_url                TEXT,
+                pr_branch             TEXT,
+                pr_repo_full          TEXT,
+                pr_opened_at          REAL,
+                pr_state              TEXT,               -- open|merged|closed
+                merged_at             REAL,
+                human_commits_on_pr   INTEGER NOT NULL DEFAULT 0,
+                created_at            REAL NOT NULL,
+                updated_at            REAL
+            )""",
+            "CREATE INDEX idx_obs_user ON break_observation(user_id)",
+            "CREATE INDEX idx_obs_match ON break_observation(vendor_package, symbol_path, break_kind)",
+            "CREATE INDEX idx_obs_pr ON break_observation(pr_repo_full, pr_number)",
+            "CREATE INDEX idx_obs_opened ON break_observation(pr_opened_at)",
+            # Per-service PR mode. NULL inherits the platform default, so a
+            # service never silently changes behaviour when that default moves.
+            "ALTER TABLE services ADD COLUMN pr_mode INTEGER",
+        ],
+        down=[
+            "DROP INDEX IF EXISTS idx_obs_opened",
+            "DROP INDEX IF EXISTS idx_obs_pr",
+            "DROP INDEX IF EXISTS idx_obs_match",
+            "DROP INDEX IF EXISTS idx_obs_user",
+            "DROP TABLE IF EXISTS break_observation",
+            "DROP INDEX IF EXISTS idx_transform_lookup",
+            "DROP TABLE IF EXISTS transform",
+            "ALTER TABLE services DROP COLUMN pr_mode",
+        ],
+    ),
+]
 
 
 @contextlib.contextmanager

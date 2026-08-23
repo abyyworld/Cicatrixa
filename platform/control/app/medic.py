@@ -8,7 +8,8 @@ import shutil
 import subprocess
 import time
 
-from . import ai, bus, db, engine, gh, patching, verify
+from . import (ai, bus, db, engine, fingerprint, flywheel, gh, patching,
+               verify)
 
 PUSH_ROOT = os.environ.get("PUSH_ROOT", "/data/push")
 AGENT_NAME = "Cicatrixa Agent"
@@ -131,6 +132,18 @@ def investigate_sync(project_id: int, user_text: str):
             bus.publish(f"project:{project_id}", "stream",
                         {"text": reply_so_far})
 
+    # Hook 1 + 3: the observation exists before the model is asked for anything,
+    # and the library is queried first. Lookup after generation would measure
+    # nothing — the hit rate is only meaningful if a hit could have replaced the
+    # generation.
+    observation_id = None
+    try:
+        observation_id = flywheel.observe(project["user_id"], project_id=project_id,
+                                          trigger="crash")
+        flywheel.lookup(observation_id)     # nothing known yet: a miss, recorded as one
+    except Exception:
+        observation_id = None               # instrumentation must never block a fix
+
     result = ai.chat_agent_streaming(prompt, _on_chunk, read_file)
     # Signal end of stream so the browser knows to stop the typing animation
     bus.publish(f"project:{project_id}", "stream_end", {})
@@ -152,6 +165,7 @@ def investigate_sync(project_id: int, user_text: str):
     if patches and service:
         add_message(project_id, "agent", reply, kind="fix",
                     data={"service": service["name"], "service_id": service["id"],
+                          "observation_id": observation_id,
                           "patches": patches[:8],
                           "commit_message": result.get("commit_message")
                           or f"Cicatrixa: fix for {service['name']}",
@@ -186,7 +200,128 @@ def _verify_patches(patches: list[dict], service, workdirs: dict) -> list[dict]:
     return verified
 
 
-def _verify_fix(clone: str, changed: dict, image: str | None, status) -> dict:
+def _record_fix(observation_id, clone: str, changed: dict, service):
+    """Hook 4. Fingerprint the changed call site so a later incident in another
+    repo can match this one without either repo's source being stored.
+
+    Python only, and silent when it cannot be computed — a wrong fingerprint
+    produces confident false matches, which is worse than no fingerprint.
+    """
+    if not observation_id:
+        return
+    try:
+        symbol = None
+        fp_hash = None
+        for rel, (_before, after) in changed.items():
+            if not rel.endswith(".py"):
+                continue
+            call = _first_vendor_call(after)
+            if call is not None:
+                symbol, fp_hash = call
+                break
+        flywheel.set_root_cause(observation_id, symbol_path=symbol,
+                                break_kind="unknown")
+        flywheel.set_fix(observation_id, fingerprint=fp_hash)
+    except Exception:
+        pass
+
+
+def _first_vendor_call(source: str):
+    """(dotted symbol, fingerprint) of the first non-local call in the file, or
+    None. Best-effort: without a dependency graph we cannot tell a vendor call
+    from a local one, so break_kind stays `unknown` and the symbol is a hint,
+    never an assertion."""
+    try:
+        import libcst as cst
+        tree = cst.parse_module(source)
+    except Exception:
+        return None
+    found = []
+
+    class V(cst.CSTVisitor):
+        def visit_Call(self, node):
+            name = fingerprint.dotted_name(node.func)
+            if name and "." in name:
+                found.append((name, fingerprint.of_call(node)))
+
+    tree.visit(V())
+    return found[0] if found else None
+
+
+def _deliver(clone, service, connection, sha, msg_line, verification,
+             observation_id, status) -> tuple[dict, str | None]:
+    """Open a pull request when the service is in PR mode, otherwise push to the
+    tracked branch. Returns (delivery_info, error).
+
+    PR mode is per service and defaults on, but an installation that predates the
+    pull_requests permission cannot open one — GitHub keeps existing installs on
+    the permissions they accepted. Rather than fail the fix, we fall back to the
+    old behaviour and say so.
+    """
+    repo, branch = service["repo_full"], service["branch"]
+
+    def push(refspec: str) -> str | None:
+        r = subprocess.run(["git", "-C", clone, "push", "origin", refspec],
+                           capture_output=True, text=True, timeout=120)
+        return None if r.returncode == 0 else (r.stderr or r.stdout).strip()[-400:]
+
+    if flywheel.pr_mode_enabled(service):
+        head = f"cicatrixa/fix-{sha[:10]}"
+        status(f"⇡ pushing {head} and opening a pull request on {repo}…")
+        err = push(f"HEAD:refs/heads/{head}")
+        if err:
+            return {}, ("Push was rejected — the GitHub connection needs write access "
+                        f"(App: Contents write / PAT: repo scope). Error: {err}")
+        try:
+            pr = gh.open_pull_request(
+                connection, repo, head=head, base=branch, title=msg_line,
+                body=_pr_body(msg_line, verification))
+            status(f"✔ opened {pr['url']} — review and merge when you're happy")
+            if observation_id:
+                flywheel.set_pr_opened(observation_id, repo_full=repo,
+                                       number=pr["number"], url=pr["url"], branch=head)
+            return {"mode": "pull_request", "branch": head, **pr}, None
+        except gh.NoPullRequestPermission as exc:
+            status(f"⚠ {exc} Falling back to pushing {branch} directly.")
+        except Exception as exc:
+            status(f"⚠ could not open a pull request ({str(exc)[:160]}) — "
+                   f"falling back to pushing {branch} directly.")
+
+    status(f"⇡ pushing to {repo}@{branch}…")
+    err = push(f"HEAD:{branch}")
+    if err:
+        return {}, ("Push was rejected — the GitHub connection needs write access "
+                    f"(App: Contents write / PAT: repo scope). Error: {err}")
+    return {"mode": "branch", "branch": branch}, None
+
+
+def _pr_body(msg_line: str, verification: dict) -> str:
+    """State exactly what was and was not proven. A PR that overclaims is worse
+    than one that says it proved nothing."""
+    level = (verification or {}).get("level", verify.UNVERIFIED)
+    covered = (verification or {}).get("covered_changed_lines") or {}
+    lines = [msg_line, "", f"**Verification: `{level}`**", ""]
+    if level == verify.UNVERIFIED:
+        if not (verification or {}).get("suite_ran"):
+            lines.append("No test suite was run against this change, so nothing here is "
+                         "proven. Review it as you would any untested patch.")
+        elif not (verification or {}).get("suite_passed"):
+            lines.append("The suite does not pass on this change.")
+        else:
+            lines.append("The suite passes, but no test executes the lines this patch "
+                         "changed — so a green suite proves only that nothing already "
+                         "covered broke. Treat this as unverified.")
+    else:
+        n = sum(len(v) for v in covered.values())
+        lines.append(f"The suite passes and {n} of the changed line(s) are executed by "
+                     f"your existing tests:")
+        lines += [f"- `{path}` lines {', '.join(str(x) for x in nums)}"
+                  for path, nums in sorted(covered.items())]
+    lines += ["", "---", "Opened by Cicatrixa."]
+    return "\n".join(lines)
+
+
+def _verify_fix(clone: str, changed: dict, image: str | None, status):
     """Run the repo's own suite against the patched tree and report honestly.
 
     Never raises: verification failing must degrade the claim, not block a fix
@@ -194,18 +329,19 @@ def _verify_fix(clone: str, changed: dict, image: str | None, status) -> dict:
     unverified_no_coverage — the same as having no tests.
     """
     result = {"level": verify.UNVERIFIED, "detail": "", "suite_ran": False}
+    evidence = None
     try:
         if not changed:
             result["detail"] = "no files changed"
-            return result
+            return result, evidence
         if not verify.detect_pytest(clone):
             status("🧪 no Python test suite in this repo — recording the fix as "
                    "unverified (no coverage)")
             result["detail"] = "no pytest suite detected"
-            return result
+            return result, evidence
         if not image:
             result["detail"] = "no image available to run the suite in"
-            return result
+            return result, evidence
 
         status("🧪 running your test suite against the patched code…")
         evidence = verify.collect(clone, changed, run=engine.test_runner(image, clone))
@@ -231,7 +367,7 @@ def _verify_fix(clone: str, changed: dict, image: str | None, status) -> dict:
     except Exception as exc:
         status(f"🧪 could not run the suite ({str(exc)[:200]}) — recording as unverified")
         result["detail"] = f"verification error: {str(exc)[:300]}"
-    return result
+    return result, evidence
 
 
 # ---------- apply: patch -> verify build -> commit -> push -> redeploy ----------
@@ -311,12 +447,20 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
                 return None, ("The patched code fails to build — not pushing. "
                               f"Build error: {str(exc)[-400:]}")
 
+        observation_id = data.get("observation_id")
+        _record_fix(observation_id, clone, changed, service)      # hook 4
+
         # The build proves it compiles. Only the suite — and only coverage of the
         # lines we actually changed — proves the fix does anything.
-        verification = _verify_fix(clone, changed,
-                                   f"cx-{service['slug']}:chatfix-verify"
-                                   if dockerfile else None, status)
+        verification, evidence = _verify_fix(
+            clone, changed,
+            f"cx-{service['slug']}:chatfix-verify" if dockerfile else None, status)
         data["verification"] = verification
+        if observation_id and evidence is not None:
+            try:
+                flywheel.set_verification(observation_id, evidence)    # hook 5
+            except Exception:
+                pass
 
         msg_line = data.get("commit_message") or f"Cicatrixa: fix {service['name']}"
         env = {**os.environ, "GIT_AUTHOR_NAME": AGENT_NAME,
@@ -327,18 +471,15 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
                            capture_output=True, text=True, env=env)
         if r.returncode != 0:
             return None, f"Nothing to commit: {r.stdout.strip()[-200:]}"
-        status(f"⇡ pushing to {service['repo_full']}@{service['branch']}…")
-        r = subprocess.run(["git", "-C", clone, "push", "origin",
-                            f"HEAD:{service['branch']}"],
-                           capture_output=True, text=True, timeout=120)
-        if r.returncode != 0:
-            err = (r.stderr or r.stdout).strip()[-400:]
-            return None, ("Push was rejected — the GitHub connection needs write access "
-                          f"(App: Contents write / PAT: repo scope). Error: {err}")
         sha = subprocess.run(["git", "-C", clone, "rev-parse", "HEAD"],
                              capture_output=True, text=True).stdout.strip()
+        pushed, err = _deliver(clone, service, connection, sha, msg_line,
+                               verification, observation_id, status)
+        if err:
+            return None, err
         data["applied"] = True
         data["pushed_sha"] = sha
+        data["delivery"] = pushed
         db.q("UPDATE chat_messages SET data=? WHERE id=?", (json.dumps(data), message_id))
         status(f"✔ pushed {sha[:10]} ({msg_line}) — redeploying {service['name']} now")
         return service["id"], f"Fix pushed as {sha[:10]}."

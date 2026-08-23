@@ -11,8 +11,8 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
                                Response, StreamingResponse)
 from fastapi.templating import Jinja2Templates
 
-from . import (ai, auth, billing, bus, db, dbprovision, engine, gh, invites,
-               mailer, medic, metrics, referrals, watchdog)
+from . import (ai, auth, billing, bus, db, dbprovision, engine, flywheel, gh,
+               invites, mailer, medic, metrics, referrals, watchdog)
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -855,11 +855,37 @@ async def github_webhook(request: Request):
     secret = db.setting("gh_app_webhook_secret", "")
     if not gh.verify_webhook(secret, request.headers.get("X-Hub-Signature-256"), body):
         return JSONResponse({"ok": False, "error": "bad signature"}, status_code=401)
-    if request.headers.get("X-GitHub-Event") != "push":
+    event = request.headers.get("X-GitHub-Event")
+
+    # Hook 7: a pull request we opened closed or merged.
+    if event == "pull_request":
+        pr = gh.parse_pull_request(body)
+        if not pr or pr["action"] not in ("closed", "reopened"):
+            return {"ok": True, "ignored": True}
+        obs = await asyncio.to_thread(flywheel.find_by_pr, pr["repo_full"], pr["number"])
+        if not obs:
+            return {"ok": True, "ignored": True}
+        merged_at = None
+        if pr["state"] == "merged" and pr.get("merged_at"):
+            merged_at = _iso_to_epoch(pr["merged_at"])
+        state = "open" if pr["action"] == "reopened" else pr["state"]
+        await asyncio.to_thread(flywheel.set_pr_closed, obs["id"], state=state,
+                                merged_at=merged_at)
+        return {"ok": True, "observation": obs["id"], "pr_state": state}
+
+    if event != "push":
         return {"ok": True, "ignored": True}
     parsed = gh.parse_push(body)
     if not parsed:
         return {"ok": True, "ignored": True}
+
+    # Hook 8: somebody pushed to a PR branch of ours. Commits that are not the
+    # agent's are the ones that count — a PR a human had to touch is a PR we got
+    # wrong, and without this the unattended rate is fiction.
+    repo_full, branch, _sha = parsed
+    human = await asyncio.to_thread(_count_human_commits, body, repo_full, branch)
+    if human:
+        return {"ok": True, "human_commits": human}
     repo_full, branch, sha = parsed
     triggered = []
     for s in db.all_(
@@ -873,6 +899,26 @@ async def github_webhook(request: Request):
         asyncio.create_task(engine.deploy(s["id"], "webhook"))
         triggered.append(s["slug"])
     return {"ok": True, "deployed": triggered}
+
+
+def _iso_to_epoch(value: str) -> float | None:
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except (ValueError, AttributeError):
+        return None
+
+
+def _count_human_commits(body: bytes, repo_full: str, branch: str) -> int:
+    """Commits on one of our open PR branches whose author is not the agent."""
+    obs = flywheel.find_by_pr_branch(repo_full, branch)
+    if not obs:
+        return 0
+    human = [e for e in gh.push_commit_authors(body)
+             if e and e != medic.AGENT_EMAIL.lower()]
+    if human:
+        flywheel.add_human_commits(obs["id"], len(human))
+    return len(human)
 
 
 @app.get("/healthz")
