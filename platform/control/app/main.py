@@ -901,6 +901,47 @@ async def github_webhook(request: Request):
     return {"ok": True, "deployed": triggered}
 
 
+# ---------- flywheel read API ----------
+#
+# JSON only, no UI. Two audiences: an owner asking what the agent did on their
+# own projects, and an admin asking whether the library is compounding.
+
+@app.get("/api/flywheel/summary")
+async def flywheel_summary(request: Request, days: int = 30):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    days = max(1, min(int(days), 365))
+    # A non-admin sees only their own tenancy. The platform-wide numbers are the
+    # ones that describe other customers' incident volume.
+    scope = None if user["is_admin"] else user["id"]
+    data = await asyncio.to_thread(flywheel.summary, days, user_id=scope)
+    data["scope"] = "platform" if scope is None else "account"
+    return data
+
+
+@app.get("/api/flywheel/observations")
+async def flywheel_observations(request: Request, limit: int = 50):
+    user = current_user(request)
+    if not user:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    scope = None if user["is_admin"] else user["id"]
+    rows = await asyncio.to_thread(flywheel.observations, user_id=scope, limit=limit)
+    return {"scope": "platform" if scope is None else "account",
+            "count": len(rows), "observations": rows}
+
+
+@app.get("/api/flywheel/transforms")
+async def flywheel_transforms(request: Request, limit: int = 50):
+    """The library. Tenant-agnostic and free of customer code by construction,
+    so any signed-in user may read it — that is the whole point of it being
+    shared."""
+    if not current_user(request):
+        return JSONResponse({"error": "authentication required"}, status_code=401)
+    rows = await asyncio.to_thread(flywheel.transforms, limit)
+    return {"count": len(rows), "transforms": rows}
+
+
 def _iso_to_epoch(value: str) -> float | None:
     try:
         from datetime import datetime

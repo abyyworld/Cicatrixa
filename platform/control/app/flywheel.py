@@ -323,6 +323,85 @@ def supporting_from_ids(observation_ids: list[int]) -> list[dict]:
     return out
 
 
+def observations(*, user_id: int | None = None, limit: int = 50) -> list[dict]:
+    """Recent observations. `user_id` scopes to one tenant; omitting it is
+    platform-wide and must only be reachable by an admin — a break_observation
+    may contain customer specifics, unlike a transform."""
+    limit = max(1, min(int(limit), 200))
+    if user_id is None:
+        rows = db.all_("SELECT * FROM break_observation ORDER BY id DESC LIMIT ?",
+                       (limit,))
+    else:
+        rows = db.all_("SELECT * FROM break_observation WHERE user_id=? "
+                       "ORDER BY id DESC LIMIT ?", (user_id, limit))
+    return [_public(r) for r in rows]
+
+
+def _public(row) -> dict:
+    """The shape the API returns. Explicit allow-list, not `dict(row)`: a column
+    added later must be opted in deliberately rather than leaking by default."""
+    return {
+        "id": row["id"],
+        "trigger": row["trigger"],
+        "vendor_package": row["vendor_package"],
+        "vendor_version_from": row["vendor_version_from"],
+        "vendor_version_to": row["vendor_version_to"],
+        "symbol_path": row["symbol_path"],
+        "break_kind": row["break_kind"],
+        "call_site_fingerprint": row["call_site_fingerprint"],
+        "library_lookup_result": row["library_lookup_result"],
+        "matched_transform_id": row["matched_transform_id"],
+        "verification_level": row["verification_level"],
+        "pr_number": row["pr_number"],
+        "pr_url": row["pr_url"],
+        "pr_state": row["pr_state"],
+        "human_commits_on_pr": row["human_commits_on_pr"],
+        "merged_at": row["merged_at"],
+        "created_at": row["created_at"],
+    }
+
+
+def transforms(limit: int = 50) -> list[dict]:
+    """The library itself. Tenant-agnostic and free of customer code by
+    construction, so this is safe to expose without scoping."""
+    limit = max(1, min(int(limit), 200))
+    rows = db.all_("SELECT * FROM transform ORDER BY id DESC LIMIT ?", (limit,))
+    return [{
+        "id": r["id"],
+        "vendor_package": r["vendor_package"],
+        "applies_to_version_range": r["applies_to_version_range"],
+        "symbol_path": r["symbol_path"],
+        "break_kind": r["break_kind"],
+        "rewrite_ref": r["rewrite_ref"],
+        "supporting_observations": json.loads(r["supporting_observations"] or "[]"),
+        "confidence_tier": r["confidence_tier"],
+        "promoted_at": r["promoted_at"],
+    } for r in rows]
+
+
+def summary(days: int = 30, *, user_id: int | None = None) -> dict:
+    """Everything the flywheel knows, in one call."""
+    since = time_window(days)
+    counts = db.one(
+        "SELECT COUNT(*) AS observations, "
+        "  COUNT(DISTINCT user_id) AS tenants, "
+        "  SUM(CASE WHEN verification_level != 'unverified_no_coverage' "
+        "      THEN 1 ELSE 0 END) AS verified "
+        "FROM break_observation WHERE created_at >= ?"
+        + (" AND user_id = ?" if user_id is not None else ""),
+        (since, user_id) if user_id is not None else (since,))
+    return {
+        "window_days": days,
+        "observations": counts["observations"] or 0,
+        "tenants": counts["tenants"] or 0,
+        "verified_observations": counts["verified"] or 0,
+        "transforms_in_library": (db.one("SELECT COUNT(*) AS n FROM transform "
+                                         "WHERE promoted_at IS NOT NULL")["n"] or 0),
+        "library": library_hit_rate(since),
+        "pull_requests": unattended_merge_rate(since),
+    }
+
+
 # ---------- PR mode ----------
 
 def pr_mode_enabled(service) -> bool:
