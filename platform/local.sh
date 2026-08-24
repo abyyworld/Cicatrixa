@@ -52,6 +52,13 @@ fi
 # aborts the whole up when it is missing.
 docker network inspect healnet >/dev/null 2>&1 || docker network create healnet >/dev/null
 
+# The demo's dynamic config lives in the repo; on the server it is rsynced to an
+# absolute path, which is why the compose default is one. Point it at the
+# checkout instead, and make sure the directory is there — an empty one is fine,
+# Traefik watches it and picks up whatever appears.
+export DEMO_DYNAMIC_DIR="${DEMO_DYNAMIC_DIR:-$(cd "$HERE/.." && pwd)/traefik/dynamic}"
+mkdir -p "$DEMO_DYNAMIC_DIR"
+
 # :80 and :443 are privileged, and on a laptop they are often taken as well —
 # by another Docker stack, by nginx, by anything. Rather than failing to start,
 # move to ports nobody fights over. Override with CX_HTTP_PORT=... if you want.
@@ -86,6 +93,10 @@ ADMIN_EMAILS=
 ENV
   echo "wrote .env for a local run (BASE_DOMAIN=localhost)."
 fi
+grep -q '^DEMO_DYNAMIC_DIR=' .env 2>/dev/null || {
+  printf '\n# Where Traefik watches for the demo router. The compose default is the\n# server path, which does not exist on a laptop.\nDEMO_DYNAMIC_DIR=%s\n' \
+    "$DEMO_DYNAMIC_DIR" >> .env
+}
 
 
 docker compose build control
