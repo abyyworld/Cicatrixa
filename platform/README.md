@@ -11,6 +11,33 @@ signup ─▶ connect GitHub ─▶ pick repo ─▶ AI deploy pipeline ─▶ l
                                           (failures: AI diagnoses, patches, retries)
 ```
 
+## Running it
+
+Three ways in, and only one of them needs a server:
+
+```bash
+./local.sh                                   # this machine, no domain, no certificates
+BASE_DOMAIN=cicatrixa.com ./bootstrap.sh     # a fresh box, run on the box itself
+SERVER=root@<ip> ./deploy.sh                 # a box that already has a checkout
+./status.sh                                  # where is the domain pointed, and what answers
+```
+
+`local.sh` is the answer to "the server is broken": the control plane, the deploy
+engine and the healer all run on your own machine, projects come up at
+`<slug>.localhost`, and nothing is tied to a host you no longer have. The one thing
+it cannot do is the GitHub App flow, which needs a public callback URL — connect with
+a fine-grained PAT instead.
+
+`bootstrap.sh` turns a rebuilt server into one command and a DNS record. It installs
+Docker if the box has none, writes the `.env`, starts the stack, and then checks the
+thing that actually matters — that the real hostname answers *through Traefik* —
+rather than trusting that compose said OK. It prints the A records to set when it
+is done.
+
+What genuinely cannot be server-independent: building and running other people's
+containers, holding :80 and :443, and keeping a health loop alive. That is what this
+product does, so it needs a Docker host somewhere — your laptop counts.
+
 ## Which host serves what
 
 - `cicatrixa.com`, `www.cicatrixa.com` and **`app.cicatrixa.com`** are all served by
