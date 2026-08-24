@@ -1,19 +1,4 @@
 {
   "outputDirectory": "site",
-  "cleanUrls": true,
-  "redirects": [
-    {
-      "source": "/",
-      "has": [{ "type": "host", "value": "app.cicatrixa.com" }],
-      "destination": "/app-status",
-      "permanent": false
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/:path*",
-      "has": [{ "type": "host", "value": "app.cicatrixa.com" }],
-      "destination": "/app-status"
-    }
-  ]
+  "cleanUrls": true
 }

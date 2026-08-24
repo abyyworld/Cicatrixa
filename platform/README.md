@@ -11,6 +11,58 @@ signup ─▶ connect GitHub ─▶ pick repo ─▶ AI deploy pipeline ─▶ l
                                           (failures: AI diagnoses, patches, retries)
 ```
 
+## Running it
+
+Three ways in, and only one of them needs a server:
+
+```bash
+./local.sh                                   # this machine, no domain, no certificates
+BASE_DOMAIN=cicatrixa.com ./bootstrap.sh     # a fresh box, run on the box itself
+SERVER=root@<ip> ./deploy.sh                 # a box that already has a checkout
+./status.sh                                  # where is the domain pointed, and what answers
+```
+
+`local.sh` is the answer to "the server is broken": the control plane, the deploy
+engine and the healer all run on your own machine, projects come up at
+`<slug>.localhost`, and nothing is tied to a host you no longer have. The one thing
+it cannot do is the GitHub App flow, which needs a public callback URL — connect with
+a fine-grained PAT instead.
+
+`bootstrap.sh` turns a rebuilt server into one command and a DNS record. It installs
+Docker if the box has none, writes the `.env`, starts the stack, and then checks the
+thing that actually matters — that the real hostname answers *through Traefik* —
+rather than trusting that compose said OK. It prints the A records to set when it
+is done.
+
+What genuinely cannot be server-independent: building and running other people's
+containers, holding :80 and :443, and keeping a health loop alive. That is what this
+product does, so it needs a Docker host somewhere — your laptop counts.
+
+## Which host serves what
+
+- `cicatrixa.com`, `www.cicatrixa.com` and **`app.cicatrixa.com`** are all served by
+  `cx-control` on the server: the docker labels in `docker-compose.yml` route all three
+  to it on :80 and :443, with the certificate issued on first request. The marketing
+  site on Vercel serves `cicatrixa.com` only when DNS points there.
+- **`app.cicatrixa.com` must resolve to the server**, not to Vercel. Vercel has no
+  control plane, so anything it serves on that hostname is a placeholder standing in
+  front of the product: signup, login, the dashboard, GitHub connect and billing all
+  live in `control/`.
+
+When the control-plane host is down, the fix is to bring it back — not to point the app
+subdomain at the static site. A placeholder there is indistinguishable from the product
+being gone, and it silently swallows every "launch app" link on the marketing page. If a
+holding page is unavoidable, put it on a hostname the product does not use, and take it
+down in the same change that brings the host back.
+
+To restore the app subdomain after an outage:
+
+```bash
+SERVER=root@<ip> ./deploy.sh          # brings up cx-traefik + cx-control, verifies :80
+dig +short app.cicatrixa.com          # must be the server's A record, not Vercel's
+curl -sI https://app.cicatrixa.com/login   # 200 from cx-control, not the static site
+```
+
 ## Architecture
 
 - **`control/`** — FastAPI control plane (`cx-control`): landing + dashboard UI, auth
