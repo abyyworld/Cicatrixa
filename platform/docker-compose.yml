@@ -9,10 +9,14 @@ services:
     image: traefik:v3.6
     container_name: cx-traefik
     ports:
-      - "80:80"       # platform UI + all user project subdomains
-      - "443:443"     # HTTPS once a router references certResolver: le
-      - "8080:8080"   # traefik dashboard (basic-auth, see demo security.yml)
-      - "9000:9000"   # healer demo dashboard (basic-auth)
+      # Defaults are the real ports, so the server is unchanged. They are
+      # variables because a laptop is not a server: 80 and 443 are privileged,
+      # and some container runtimes on macOS cannot bind them without extra
+      # setup — local.sh moves them rather than failing to start.
+      - "${CX_HTTP_PORT:-80}:80"        # platform UI + all user project subdomains
+      - "${CX_HTTPS_PORT:-443}:443"     # HTTPS once a router references certResolver: le
+      - "${CX_TRAEFIK_PORT:-8080}:8080" # traefik dashboard (basic-auth, see demo security.yml)
+      - "${CX_HEALER_PORT:-9000}:9000"  # healer demo dashboard (basic-auth)
     volumes:
       - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "${DEMO_DYNAMIC_DIR:-/root/Cicatrixa/traefik/dynamic}:/dynamic"
