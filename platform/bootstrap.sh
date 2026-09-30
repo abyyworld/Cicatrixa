@@ -16,6 +16,16 @@
 # point: nothing in this stack is tied to the machine it last ran on.
 set -euo pipefail
 
+# Settings the caller may pass. Recorded before anything is defaulted, so a
+# re-run can tell "you passed this" from "the script filled this in" — only the
+# former may overwrite a value already in .env.
+SETTINGS="BASE_DOMAIN BASE_URL OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY
+MAIL_FROM STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET"
+PASSED=""
+for v in $SETTINGS; do
+  [ -n "${!v:-}" ] && PASSED="$PASSED $v"
+done
+
 REPO="${REPO:-https://github.com/abyyworld/cicatrixa.git}"
 DEST="${DEST:-/root/cicatrixa-platform}"
 BASE_DOMAIN="${BASE_DOMAIN:-}"
@@ -73,8 +83,35 @@ fi
 cd "$DEST"
 
 echo "── Settings"
+# Replace or add KEY=VALUE in .env. Written via a temp file so values containing
+# / or & (URLs, keys) need no escaping.
+upsert() {
+  local t; t="$(mktemp)"
+  grep -v "^$1=" .env > "$t" || true
+  printf '%s=%s\n' "$1" "$2" >> "$t"
+  mv "$t" .env
+}
+
 if [ -f .env ]; then
   echo "  keeping the .env already here"
+  had_domain="$(grep -E '^BASE_DOMAIN=' .env | tail -1 | cut -d= -f2-)"
+  if [ -n "$had_domain" ] && [ "$had_domain" != "$BASE_DOMAIN" ]; then
+    echo "  !! BASE_DOMAIN changes: $had_domain -> $BASE_DOMAIN. Every router rule and"
+    echo "     certificate follows it; existing user apps keep their old hostnames until"
+    echo "     each is redeployed."
+    # BASE_URL was derived from the old domain; unless one was passed explicitly,
+    # it has to move too, or the GitHub callback, invite links and Stripe return
+    # URL keep pointing at the old domain.
+    case " $PASSED " in
+      *" BASE_URL "*) ;;
+      *) upsert BASE_URL "https://app.$BASE_DOMAIN"
+         echo "  BASE_URL follows it: https://app.$BASE_DOMAIN" ;;
+    esac
+  fi
+  for v in $PASSED; do
+    upsert "$v" "${!v}"
+    echo "  updated $v from what you passed"
+  done
 else
   cat > .env <<ENV
 BASE_DOMAIN=$BASE_DOMAIN
@@ -110,4 +147,11 @@ echo "── Is it reachable from the internet?"
 # internet cannot reach. verify-public.sh only goes green once a trusted
 # certificate is being served, which requires Let's Encrypt to have reached :80
 # through public DNS. It exits 2, not 1, when the only thing missing is DNS.
-./verify-public.sh
+# Check the domain the stack actually runs with (.env), not merely the one in this
+# shell. Restarting Traefik to retry a certificate is allowed only while no
+# customer app is routed through it — a restart would drop every one of them.
+apps="$(docker ps --filter label=traefik.enable=true --format '{{.Names}}' \
+          | grep -vxE 'cx-control|cx-traefik' || true)"
+allow=1; [ -n "$apps" ] && allow=0
+BASE_DOMAIN="$(grep -E '^BASE_DOMAIN=' .env | tail -1 | cut -d= -f2-)" \
+  VERIFY_ALLOW_RESTART="$allow" ./verify-public.sh

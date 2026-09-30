@@ -47,8 +47,6 @@ services:
       - RAM_PER_DB_MB=${RAM_PER_DB_MB:-512}
       - BUILD_MEM_MB=${BUILD_MEM_MB:-2048}
       - BUILD_CONCURRENCY=${BUILD_CONCURRENCY:-2}
-      # read by engine.py for user-app routers, so one switch covers every app
-      - HTTPS_REDIRECT_MW=${HTTPS_REDIRECT_MW:-cx-to-https}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -67,7 +65,13 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=cxnet"
-      - "traefik.http.routers.cx-control.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
+      # app.<domain> ONLY. The apex and www belong to the marketing site (Vercel) and
+      # must never appear in a certresolver router here: Traefik turns every Host()
+      # in a rule into one certificate order, Let's Encrypt's check for the apex lands
+      # on Vercel and fails, and one failed name fails the whole order — so app.
+      # never got a trusted certificate. Unmatched hosts on :80 still reach the UI
+      # through cx-control-fallback below.
+      - "traefik.http.routers.cx-control.rule=Host(`app.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control.entrypoints=web"
       - "traefik.http.routers.cx-control.service=cx-control"
       - "traefik.http.routers.cx-control.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https}"
@@ -89,8 +93,13 @@ services:
       # certificate that fails to issue degrades to plain HTTP instead of blacking out
       # the site (an unreachable :443 behind a permanent redirect looks like a timeout).
       - "traefik.http.middlewares.cx-plain.compress=true"
+      # What every USER APP's :80 router runs. Apps reference this fixed name rather
+      # than carrying the switch in their own labels, which are frozen when the
+      # container is created — so flipping HTTPS_REDIRECT_MW and recreating
+      # cx-control re-points every running app at once, no redeploys.
+      - "traefik.http.middlewares.cx-app-web.chain.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https}"
       # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
-      - "traefik.http.routers.cx-control-secure.rule=Host(`${BASE_DOMAIN}`) || Host(`app.${BASE_DOMAIN}`) || Host(`www.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.cx-control-secure.rule=Host(`app.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control-secure.entrypoints=websecure"
       - "traefik.http.routers.cx-control-secure.service=cx-control"
       - "traefik.http.routers.cx-control-secure.tls.certresolver=le"

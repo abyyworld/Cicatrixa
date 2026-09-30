@@ -7,10 +7,15 @@ import pytest
 
 @pytest.fixture
 def engine(monkeypatch):
+    """Tests here reload app.engine under different env. The reloaded module would
+    otherwise outlive the test — module globals are read at import — so teardown
+    restores the env FIRST and then rebuilds the module from it."""
+    from app import engine as e
     monkeypatch.setenv("BASE_DOMAIN", "cicatrixa.com")
     monkeypatch.setenv("BASE_URL", "https://app.cicatrixa.com")
-    from app import engine as e
-    return e
+    yield e
+    monkeypatch.undo()
+    importlib.reload(e)
 
 
 def _service(slug="shop"):
@@ -24,18 +29,35 @@ def _reload(monkeypatch, **env):
     return importlib.reload(e)
 
 
-def test_user_apps_redirect_to_https_by_default(engine, monkeypatch):
-    e = _reload(monkeypatch, BASE_URL="https://app.cicatrixa.com")
-    labels = e._labels(_service(), 3000)
-    assert labels["traefik.http.routers.cx-shop.middlewares"] == "cx-to-https"
+def test_user_apps_use_the_shared_middleware_not_a_frozen_value(engine, monkeypatch):
+    """Labels are fixed when a container is created. If the switch's current value
+    were baked in, flipping HTTPS_REDIRECT_MW later would do nothing for the apps
+    already running — the ones a certificate outage is actually hurting."""
+    for switch in ("cx-to-https", "cx-plain"):
+        e = _reload(monkeypatch, BASE_URL="https://app.cicatrixa.com", HTTPS_REDIRECT_MW=switch)
+        labels = e._labels(_service(), 3000)
+        assert labels["traefik.http.routers.cx-shop.middlewares"] == "cx-app-web"
 
 
-def test_the_plain_http_escape_hatch_reaches_user_apps(engine, monkeypatch):
-    """It used to cover only the dashboard: user apps hard-coded cx-to-https, so a
-    certificate outage redirected every customer to a :443 that could not answer."""
-    e = _reload(monkeypatch, BASE_URL="https://app.cicatrixa.com", HTTPS_REDIRECT_MW="cx-plain")
-    labels = e._labels(_service(), 3000)
-    assert labels["traefik.http.routers.cx-shop.middlewares"] == "cx-plain"
+def test_the_shared_middleware_is_defined_on_the_control_plane():
+    """cx-app-web only exists if docker-compose.yml defines it; a router pointing at
+    an undefined middleware is dropped by Traefik, taking the app offline."""
+    import pathlib
+    compose = (pathlib.Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text()
+    assert "traefik.http.middlewares.cx-app-web.chain.middlewares=" in compose
+
+
+def test_no_certificate_order_includes_the_apex():
+    """The apex lives on Vercel. Any certresolver router whose rule names it makes
+    Let's Encrypt validate it, fail, and fail the whole order — app. included."""
+    import pathlib, re
+    compose = (pathlib.Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text()
+    secure = re.findall(r'routers\.([\w-]+)\.tls\.certresolver', compose)
+    assert secure, "expected at least one certresolver router"
+    for router in secure:
+        rule = re.search(rf'routers\.{re.escape(router)}\.rule=(.*)"', compose).group(1)
+        hosts = re.findall(r"Host\(`([^`]+)`\)", rule)
+        assert hosts == ["app.${BASE_DOMAIN}"], f"{router} orders a cert for {hosts}"
 
 
 def test_builds_are_memory_capped(engine, monkeypatch):

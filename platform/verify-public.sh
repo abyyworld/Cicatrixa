@@ -9,12 +9,16 @@
 #
 # Why a trusted certificate is the test: a curl to 127.0.0.1 proves only that
 # the containers started — it goes around every cloud firewall, security list
-# and DNS mistake there is. A certificate from Let's Encrypt can only exist if
-# Let's Encrypt reached :80 on this box through public DNS. So a check that
-# refuses Traefik's self-signed fallback (no -k) cannot pass on a box the
-# internet cannot reach. The one thing it cannot see is a firewall that allows
-# :80 but blocks :443 — the last line printed tells you how to close that gap
-# from outside.
+# and DNS mistake there is. Let's Encrypt can only issue a certificate after
+# reaching :80 on this box through public DNS, so a certificate issued DURING
+# THIS RUN proves the internet could reach the box a moment ago. One issued
+# earlier (already in acme.json) proves only that DNS and the stack are right:
+# a firewall closed since then would not show. The script says which case it
+# is, and deploy.sh / recover.sh follow up with a real check from outside.
+#
+# VERIFY_ALLOW_RESTART=1 lets it restart Traefik once to retry a certificate
+# request that failed before DNS was ready. Only bootstrap.sh sets it: on a box
+# with customer apps, restarting Traefik drops every one of them.
 set -uo pipefail
 
 cd "$(dirname "$0")"
@@ -27,9 +31,21 @@ if [ -z "${BASE_DOMAIN:-}" ]; then
 fi
 
 HOST="app.$BASE_DOMAIN"
+START="$(date +%s)"
 TIMEOUT="${VERIFY_TIMEOUT:-180}"     # seconds to wait for a trusted certificate
 STEP="${VERIFY_STEP:-5}"
 RESTART_AFTER="${VERIFY_RESTART_AFTER:-60}"
+ALLOW_RESTART="${VERIFY_ALLOW_RESTART:-0}"
+
+# When the certificate being served was issued (its notBefore), as epoch seconds,
+# or empty if that cannot be read.
+cert_issued_at() {
+  command -v openssl >/dev/null 2>&1 || return 0
+  local nb
+  nb="$(echo | openssl s_client -connect 127.0.0.1:443 -servername "$HOST" 2>/dev/null \
+          | openssl x509 -noout -startdate 2>/dev/null | cut -d= -f2)"
+  [ -n "$nb" ] && date -d "$nb" +%s 2>/dev/null || true
+}
 
 say() { printf '  %s\n' "$*"; }
 
@@ -79,11 +95,22 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
             --resolve "$HOST:443:127.0.0.1" "https://$HOST/healthz" 2>/dev/null)"
   rc=$?
   if [ "$rc" -eq 0 ] && [ "$code" = "200" ]; then
+    issued="$(cert_issued_at)"
     echo
-    echo "✓ $HOST is live: DNS points here and Let's Encrypt issued a trusted certificate,"
-    echo "  which it can only do after reaching this box on :80 from the internet."
+    # Let's Encrypt backdates notBefore by about an hour, so "fresh" allows two.
+    if [ -n "$issued" ] && [ "$issued" -ge $((START - 7200)) ]; then
+      echo "✓ $HOST is live: DNS points here and Let's Encrypt issued a trusted certificate"
+      echo "  just now, which it can only do after reaching this box on :80 from the internet."
+    elif [ -n "$issued" ]; then
+      echo "✓ $HOST: DNS points here and the stack serves its trusted certificate."
+      echo "  That certificate was issued earlier ($(date -u -d "@$issued" '+%F %H:%M UTC')), so this"
+      echo "  does NOT prove the internet can reach the box right now — check from outside:"
+    else
+      echo "✓ $HOST: DNS points here and a trusted certificate is being served"
+      echo "  (its issue date could not be read). Confirm from outside:"
+    fi
     echo
-    echo "  Last check, from your laptop (proves :443 is open outside too):"
+    echo "  From your laptop (the only check that sees the firewall as a visitor does):"
     echo "    curl -sS https://$HOST/healthz      # expect {\"ok\":true}"
     exit 0
   fi
@@ -95,9 +122,9 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
     *)              last="curl exit $rc" ;;
   esac
   # A certificate request that failed before DNS was ready is not retried until
-  # Traefik reloads. One restart re-triggers it; it only happens when the site is
-  # already unreachable over HTTPS, so it takes nothing down that was up.
-  if [ -z "$restarted" ] && [ "$waited" -ge "$RESTART_AFTER" ]; then
+  # Traefik reloads, and one restart re-triggers it. Only when allowed: on a box
+  # with customer apps a restart drops them all.
+  if [ "$ALLOW_RESTART" = "1" ] && [ -z "$restarted" ] && [ "$waited" -ge "$RESTART_AFTER" ]; then
     say "no trusted certificate after ${waited}s — restarting Traefik once to retry issuance"
     docker compose restart traefik >/dev/null 2>&1 || true
     restarted=1
@@ -113,6 +140,12 @@ echo >&2
 echo "  Let's Encrypt must reach this box on :80 from the internet. In order:" >&2
 echo "   1. the provider's firewall / security list allows TCP 80 and 443 from 0.0.0.0/0" >&2
 echo "   2. the DNS record is DNS only (grey cloud), not proxied" >&2
-echo "   3. what Traefik says:  docker compose logs traefik | grep -iE 'acme|certificate'" >&2
+echo "   3. what Traefik says — the log names every domain in the failed order; any" >&2
+echo "      name there that is NOT pointed at this box (e.g. an apex on Vercel) fails" >&2
+echo "      the whole certificate:  docker compose logs traefik | grep -iE 'acme|certificate'" >&2
 echo "   4. Let's Encrypt rate limits (too many failed attempts pause issuance for an hour)" >&2
+if [ "$ALLOW_RESTART" != "1" ]; then
+  echo "   5. a request that failed before DNS was ready is only retried when Traefik" >&2
+  echo "      reloads; if nothing else is hosted here yet: docker compose restart traefik" >&2
+fi
 exit 1

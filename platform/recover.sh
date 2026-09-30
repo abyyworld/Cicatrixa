@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # One-shot recovery for the Cicatrixa platform VPS. Run from your laptop:
 #
-#     SERVER=root@169.58.36.128 ./platform/recover.sh
+#     SERVER=root@<ip> ./platform/recover.sh
 #
 # Stage 1 works out whether the box is reachable at all and says which layer is
 # broken. Stage 2 only runs if SSH answers, and then diagnoses and repairs the
 # stack: disk, stale demo containers holding :80, the healnet network, a
-# placeholder BASE_DOMAIN, and finally verifies /healthz over HTTP and HTTPS.
+# placeholder BASE_DOMAIN. It ends with verify-public.sh on the box (a trusted
+# certificate through Traefik; exit 0 live, 2 DNS pending, 1 broken) and then
+# one request to https://app.<domain>/healthz from this machine.
+#
+# Needs root SSH (the platform lives in /root). On Oracle see docs/RUNBOOK.md.
 set -uo pipefail
 
-SERVER="${SERVER:-root@169.58.36.128}"
+# No default: providers reassign IPs, and the old default is a dead box's.
+SERVER="${SERVER:?set SERVER=root@<ip> — the box to recover}"
 HOST="${SERVER#*@}"
 DOMAIN="${DOMAIN:-cicatrixa.com}"
 
@@ -54,6 +59,11 @@ TXT
 fi
 
 say "stage 2 — SSH answers, repairing the stack"
+# Ship the current check first: a box installed before verify-public.sh existed
+# does not have it, and the stage below ends by running it.
+scp -q -o ConnectTimeout=15 "$(cd "$(dirname "$0")" && pwd)/verify-public.sh" \
+    "$SERVER:/root/cicatrixa-platform/verify-public.sh" 2>/dev/null \
+  || echo "  (could not copy verify-public.sh — the check below says so if it is missing)"
 ssh -o ConnectTimeout=15 "$SERVER" 'bash -s' -- "$DOMAIN" <<'REMOTE'
 set -uo pipefail
 DOMAIN="$1"
@@ -124,7 +134,13 @@ docker compose ps
 step "verifying from the internet's point of view"
 # A trusted certificate or nothing: the old check used curl -k and passed on
 # Traefik's self-signed fallback, i.e. on a box the internet could not reach.
-BASE_DOMAIN="$DOMAIN" ./verify-public.sh
+# No BASE_DOMAIN override: the script reads .env, which is what the stack runs
+# with — including when the box's domain differs from the one passed in.
+if [ ! -f ./verify-public.sh ]; then
+  echo "!! verify-public.sh is missing on the box — run platform/deploy.sh to ship the current tree"
+  exit 1
+fi
+bash ./verify-public.sh
 rc=$?
 if [ "$rc" -eq 0 ]; then
   echo "Redeploy each user project once so its containers get the HTTPS Traefik"
@@ -132,3 +148,15 @@ if [ "$rc" -eq 0 ]; then
 fi
 exit "$rc"
 REMOTE
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
+
+say "from here — the one check the box cannot do for itself"
+if body="$(curl -sS --max-time 20 "https://app.$DOMAIN/healthz" 2>&1)" \
+   && printf '%s' "$body" | grep -q '"ok"'; then
+  echo "✓ reachable from the internet: $body"
+else
+  echo "✗ the box says it is up, but it is NOT reachable from here: $body"
+  echo "  check the provider firewall / security list for 80 and 443."
+  exit 1
+fi

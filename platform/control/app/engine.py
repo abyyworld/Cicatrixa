@@ -34,10 +34,11 @@ CPU_PER_CONTAINER = float(os.environ.get("CPU_PER_CONTAINER", "0.25"))
 # BUILD_CONCURRENCY builds run at once.
 BUILD_MEM_MB = int(os.environ.get("BUILD_MEM_MB", "2048"))
 BUILD_CONCURRENCY = max(1, int(os.environ.get("BUILD_CONCURRENCY", "2")))
-# The :80 middleware for user apps. Same switch as the control plane's router in
-# docker-compose.yml, so HTTPS_REDIRECT_MW=cx-plain degrades every app to plain
-# HTTP together when certificates cannot issue, instead of only the dashboard.
-REDIRECT_MW = os.environ.get("HTTPS_REDIRECT_MW", "cx-to-https")
+# The :80 middleware for user apps: a fixed name, defined on cx-control in
+# docker-compose.yml as a chain over HTTPS_REDIRECT_MW. Labels are frozen when an
+# app container is created, so baking the switch's current value in here would
+# leave every running app on the old behaviour after the switch flips.
+APP_WEB_MW = "cx-app-web"
 API_NAME_RE = re.compile(r"(api|backend|server|graphql|rest)", re.I)
 
 
@@ -379,7 +380,7 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
         f"traefik.http.services.cx-{slug}.loadbalancer.server.port": str(port),
     }
     if HTTPS_ENABLED:
-        labels[f"traefik.http.routers.cx-{slug}.middlewares"] = REDIRECT_MW
+        labels[f"traefik.http.routers.cx-{slug}.middlewares"] = APP_WEB_MW
         labels[f"traefik.http.routers.cx-{slug}-secure.rule"] = f"Host(`{slug}.{BASE_DOMAIN}`)"
         labels[f"traefik.http.routers.cx-{slug}-secure.entrypoints"] = "websecure"
         labels[f"traefik.http.routers.cx-{slug}-secure.service"] = f"cx-{slug}"

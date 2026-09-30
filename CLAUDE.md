@@ -34,15 +34,17 @@ Nothing in this repo can change a DNS record — there is no Cloudflare API call
 **Check reality before trusting this table:** `dig +short app.cicatrixa.com`.
 
 ```
-                     AS OF 2026-09-30
-  cicatrixa.com      Vercel            ✓ fixed 2026-08-23 (CNAME → cname.vercel-dns.com)
-  www                Vercel            ✓
-  app                NO HOST           the old VPS 169.58.36.128 is dead (no ping, no SSH)
-  *                  NO HOST           same — every customer app is down
+                 RECORD TODAY (2026-09-30)                  TARGET
+  cicatrixa.com  CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
+  www            CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
+  app            CNAME → cname.vercel-dns.com  (Vercel) ✗   A → <platform box>, DNS only
+  *              A     → 169.58.36.128  (dead box)      ✗   A → <platform box>, DNS only
 ```
 
-The apex and `www` belong to Vercel and must stay there. `app` and `*` need a Linux box
-running Docker; point both at it with DNS-only (grey cloud) A records. Nothing else moves.
+The apex and `www` belong to Vercel and must stay there. `app` and `*` need a Linux box running
+Docker. Both records already exist, so they are **edited**, not added: Cloudflare will not create
+an A record beside an existing CNAME of the same name. Then remove `app.cicatrixa.com` from the
+Vercel project so nothing else claims it.
 
 ## Hosting the platform — what can and cannot run it
 
@@ -60,10 +62,12 @@ So it needs **a Linux host with root and Docker**. Researched and fact-checked 2
   ARM64 (halved from 4/24 on 2026-06-15), 200 GB disk, card required but not charged. Risks: Oracle's
   Cloud Services Agreement limits use to "internal business operations" and bars "service bureau"
   use — selling hosting on it is plausibly a breach, and Oracle has disabled and deleted Always Free
-  instances in 2026. Treat it as a stopgap and back up `/data/cicatrixa.db` off the box. Customer
+  instances in 2026. Treat it as a stopgap and back up `/data/cicatrixa.db` off the box. Its images
+  refuse root SSH, which `deploy.sh` / `recover.sh` need — the runbook has the one-line fix. Customer
   repos that assume x86 (amd64-only binaries, npm lockfiles missing arm64 optional deps) will fail
   with "exec format error"; `ai.py` tells the model the host architecture to reduce this.
-- **A €4–5/mo x86 VPS (Hetzner CX22, etc.): the clean answer.** No ToS risk, no ARM surprises.
+- **A ~€5–6/mo x86 VPS (the smallest Hetzner cloud plan, or similar): the clean answer.** No ToS
+  risk, no ARM surprises. Hetzner renamed and repriced its plans in 2026 — check before quoting one.
 - GCP e2-micro (1 GB RAM), AWS (credits, time-limited), Azure (12 months) and every PaaS without a
   Docker socket were rejected.
 
@@ -121,10 +125,19 @@ freezes every request in the process.
 
 - Never point `cicatrixa.com` (apex) at the VPS again — it belongs to Vercel.
 - Never publish host ports on user containers; route by Traefik label.
-- Verify a deploy with `platform/verify-public.sh`, never by "compose said OK" and never with
-  `curl -k`. It passes only on a **trusted** certificate, which Let's Encrypt can only issue after
-  reaching the box on :80 through public DNS — so it cannot go green on a box the internet cannot
-  reach. `-k` accepts Traefik's self-signed fallback and passes on exactly that box.
+- Verify with `platform/verify-public.sh` on the box, never "compose said OK", never `curl -k`
+  (`-k` accepts Traefik's self-signed fallback, so it passes on a box nobody can reach). It
+  passes only on a **trusted** certificate. A certificate issued *during the run* proves Let's
+  Encrypt reached :80 through public DNS; one issued earlier proves only DNS and the stack, and
+  the script says which. Only a request from **outside** the box sees today's firewall — so
+  `deploy.sh` and `recover.sh` end with one from the laptop. Keep it that way.
+- No router with `tls.certresolver` may name the apex or `www`. Traefik turns every `Host()` in
+  a rule into ONE certificate order; the apex's challenge lands on Vercel, fails, and fails the
+  whole order — `app.` included. The control-plane routers match `app.<domain>` only
+  (a test in `tests/test_engine_config.py` enforces it).
+- User-app routers use the fixed middleware `cx-app-web`, defined on cx-control as a chain over
+  `HTTPS_REDIRECT_MW`. Never bake the switch's value into app labels: labels freeze when a
+  container is created, so the switch would stop reaching running apps.
 - `BASE_URL` must be `https://app.cicatrixa.com`, never the apex: it builds the GitHub App
   callback, referral invite links and the Stripe checkout return URL. Point those at the static
   Vercel page and GitHub install, invites and billing all break silently.
