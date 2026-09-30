@@ -15,8 +15,12 @@ services:
       # setup — local.sh moves them rather than failing to start.
       - "${CX_HTTP_PORT:-80}:80"        # platform UI + all user project subdomains
       - "${CX_HTTPS_PORT:-443}:443"     # HTTPS once a router references certResolver: le
-      - "${CX_TRAEFIK_PORT:-8080}:8080" # traefik dashboard (basic-auth, see demo security.yml)
-      - "${CX_HEALER_PORT:-9000}:9000"  # healer demo dashboard (basic-auth)
+      # The two admin ports bind to loopback by default: reach them over an SSH
+      # tunnel. Docker-published ports bypass the host's INPUT firewall entirely,
+      # so "the firewall only allows 80/443" does not protect anything bound to
+      # 0.0.0.0 here — and neither router behind these has real auth configured.
+      - "${CX_TRAEFIK_PORT:-127.0.0.1:8080}:8080" # traefik dashboard
+      - "${CX_HEALER_PORT:-127.0.0.1:9000}:9000"  # healer demo dashboard
     volumes:
       - "./traefik/traefik.yml:/etc/traefik/traefik.yml:ro"
       - "${DEMO_DYNAMIC_DIR:-/root/Cicatrixa/traefik/dynamic}:/dynamic"
@@ -40,6 +44,11 @@ services:
       - DEFAULT_QUOTA_DISK_MB=${DEFAULT_QUOTA_DISK_MB:-5120}
       - RAM_PER_CONTAINER_MB=${RAM_PER_CONTAINER_MB:-768}
       - CPU_PER_CONTAINER=${CPU_PER_CONTAINER:-0.25}
+      - RAM_PER_DB_MB=${RAM_PER_DB_MB:-512}
+      - BUILD_MEM_MB=${BUILD_MEM_MB:-2048}
+      - BUILD_CONCURRENCY=${BUILD_CONCURRENCY:-2}
+      # read by engine.py for user-app routers, so one switch covers every app
+      - HTTPS_REDIRECT_MW=${HTTPS_REDIRECT_MW:-cx-to-https}
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}

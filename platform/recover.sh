@@ -121,36 +121,14 @@ step "bringing the stack up"
 docker compose up -d --remove-orphans
 docker compose ps
 
-step "verifying through Traefik"
-ok80=FAILED; ok443=FAILED
-for i in $(seq 1 45); do
-  if [ "$ok443" = FAILED ]; then
-    c=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
-          --resolve "app.$DOMAIN:443:127.0.0.1" "https://app.$DOMAIN/healthz" 2>/dev/null)
-    [ "$c" = 200 ] && ok443=ok && echo "  :443 -> 200 (${i}s)"
-  fi
-  if [ "$ok80" = FAILED ]; then
-    c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-          -H "Host: app.$DOMAIN" http://127.0.0.1/healthz 2>/dev/null)
-    case "$c" in 200|301|302|308) ok80=ok; echo "  :80  -> $c (${i}s)" ;; esac
-  fi
-  [ "$ok80" = ok ] && [ "$ok443" = ok ] && break
-  sleep 1
-done
-
-echo
-echo "RESULT: :80 $ok80, :443 $ok443"
-if [ "$ok80" = ok ] && [ "$ok443" = ok ]; then
-  echo "✓ app.$DOMAIN is serving. Redeploy each user project once so its containers"
-  echo "  get the HTTPS Traefik labels (they are baked in at container creation)."
-else
-  echo "✗ still not serving — logs follow"
-  docker compose logs --tail=80 traefik control
-  if [ "$ok80" = ok ] && [ "$ok443" = FAILED ]; then
-    echo
-    echo "Only :443 failed, so the certificate never issued. Let's Encrypt validates"
-    echo "over HTTP-01 on :80 — confirm app.$DOMAIN resolves to THIS box and that :80"
-    echo "is open inbound from the internet."
-  fi
+step "verifying from the internet's point of view"
+# A trusted certificate or nothing: the old check used curl -k and passed on
+# Traefik's self-signed fallback, i.e. on a box the internet could not reach.
+BASE_DOMAIN="$DOMAIN" ./verify-public.sh
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "Redeploy each user project once so its containers get the HTTPS Traefik"
+  echo "labels — they are baked in at container creation."
 fi
+exit "$rc"
 REMOTE

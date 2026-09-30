@@ -28,6 +28,16 @@ MAX_ATTEMPTS = 3
 COMMON_PORTS = [3000, 8000, 8080, 5000, 80, 4000, 8501, 5173, 9000, 3001]
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
 CPU_PER_CONTAINER = float(os.environ.get("CPU_PER_CONTAINER", "0.25"))
+# Builds run customer code (npm install, next build, pip compiling wheels) with no
+# cap by default, so one heavy build can take the whole host down with it — and
+# every customer on it. Each build step's container is capped at this, and at most
+# BUILD_CONCURRENCY builds run at once.
+BUILD_MEM_MB = int(os.environ.get("BUILD_MEM_MB", "2048"))
+BUILD_CONCURRENCY = max(1, int(os.environ.get("BUILD_CONCURRENCY", "2")))
+# The :80 middleware for user apps. Same switch as the control plane's router in
+# docker-compose.yml, so HTTPS_REDIRECT_MW=cx-plain degrades every app to plain
+# HTTP together when certificates cannot issue, instead of only the dashboard.
+REDIRECT_MW = os.environ.get("HTTPS_REDIRECT_MW", "cx-to-https")
 API_NAME_RE = re.compile(r"(api|backend|server|graphql|rest)", re.I)
 
 
@@ -39,7 +49,7 @@ def _is_api_name(name: str) -> bool:
     return bool(API_NAME_RE.search(name or ""))
 
 _locks: dict[int, asyncio.Lock] = {}
-_build_sem = asyncio.Semaphore(2)
+_build_sem = asyncio.Semaphore(BUILD_CONCURRENCY)
 _docker: docker.DockerClient | None = None
 
 
@@ -303,8 +313,12 @@ def _build_args(service, siblings: list[dict], plan) -> dict:
 def _build(workdir: str, dockerfile: str, tag: str, log, buildargs: dict | None = None) -> str:
     api = dock().api
     out = []
+    # memswap == memory means no swap on top: an over-limit step fails the build,
+    # which the heal loop reports, rather than thrashing the host for everyone.
+    limit = BUILD_MEM_MB * 1024 * 1024
     for chunk in api.build(path=workdir, dockerfile=dockerfile, tag=tag,
-                           rm=True, decode=True, buildargs=buildargs or {}):
+                           rm=True, decode=True, buildargs=buildargs or {},
+                           container_limits={"memory": limit, "memswap": limit}):
         if "stream" in chunk:
             text = chunk["stream"].rstrip()
             if text:
@@ -365,7 +379,7 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
         f"traefik.http.services.cx-{slug}.loadbalancer.server.port": str(port),
     }
     if HTTPS_ENABLED:
-        labels[f"traefik.http.routers.cx-{slug}.middlewares"] = "cx-to-https"
+        labels[f"traefik.http.routers.cx-{slug}.middlewares"] = REDIRECT_MW
         labels[f"traefik.http.routers.cx-{slug}-secure.rule"] = f"Host(`{slug}.{BASE_DOMAIN}`)"
         labels[f"traefik.http.routers.cx-{slug}-secure.entrypoints"] = "websecure"
         labels[f"traefik.http.routers.cx-{slug}-secure.service"] = f"cx-{slug}"

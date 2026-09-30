@@ -31,38 +31,12 @@ ssh "$SERVER" "set -euo pipefail; cd $DEST; "'
   docker compose up -d --remove-orphans
   docker compose ps
 
-  # "compose said OK" is not "the site loads". Verify through Traefik on the real host
-  # rule, which is what actually broke last time. Only 200 counts: :80 redirects to
-  # :443, so accepting a 3xx here would greenlight precisely the failure we are
-  # guarding against — a redirect pointing at a port that cannot answer.
-  echo "→ verifying https://app.$BASE_DOMAIN/healthz through Traefik ..."
-  ok_http="" ; ok_https=""
-  for i in $(seq 1 45); do
-    if [ -z "$ok_https" ]; then
-      c=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 \
-            --resolve "app.$BASE_DOMAIN:443:127.0.0.1" \
-            "https://app.$BASE_DOMAIN/healthz" 2>/dev/null || true)
-      if [ "$c" = "200" ]; then
-        ok_https=ok
-        echo "  ✓ :443 terminated TLS and reached cx-control (${i}s)"
-      fi
-    fi
-    if [ -z "$ok_http" ]; then
-      c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-            -H "Host: app.$BASE_DOMAIN" http://127.0.0.1/healthz 2>/dev/null || true)
-      case "$c" in
-        200|301|302|308) ok_http=ok; echo "  ✓ :80 answered $c (${i}s)" ;;
-      esac
-    fi
-    if [ -n "$ok_http" ] && [ -n "$ok_https" ]; then
-      echo "✓ deploy verified"
-      exit 0
-    fi
-    sleep 1
-  done
-  echo "✗ unhealthy after 45s — :80 ${ok_http:-FAILED}, :443 ${ok_https:-FAILED}" >&2
-  echo "  :443 failing alone usually means the certificate never issued — check that the A" >&2
-  echo "  record for app.$BASE_DOMAIN reaches this box and that :80 accepts inbound traffic." >&2
-  docker compose logs --tail=80 traefik control >&2
-  exit 1
+  # "compose said OK" is not "the site loads", and a curl to 127.0.0.1 is not
+  # either: it goes around every firewall and DNS mistake there is. This used to
+  # check :443 with curl -k, which accepted the self-signed fallback certificate
+  # and so passed on a box nobody could reach. verify-public.sh accepts only a
+  # TRUSTED certificate, which can only be issued after the CA reached this box on
+  # :80 through public DNS. Exit 0 live, 2 pending DNS, 1 broken, passed through.
+  # (No apostrophes anywhere in this block: it is one single-quoted ssh argument.)
+  BASE_DOMAIN="$BASE_DOMAIN" ./verify-public.sh
 '
