@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # One-shot recovery for the Cicatrixa platform VPS. Run from your laptop:
 #
-#     SERVER=root@169.58.36.128 ./platform/recover.sh
+#     SERVER=root@<ip> ./platform/recover.sh
 #
 # Stage 1 works out whether the box is reachable at all and says which layer is
 # broken. Stage 2 only runs if SSH answers, and then diagnoses and repairs the
 # stack: disk, stale demo containers holding :80, the healnet network, a
-# placeholder BASE_DOMAIN, and finally verifies /healthz over HTTP and HTTPS.
+# placeholder BASE_DOMAIN. It ends with verify-public.sh on the box (a trusted
+# certificate through Traefik; exit 0 live, 2 DNS pending, 1 broken) and then
+# one request to https://app.<domain>/healthz from this machine.
+#
+# Needs root SSH (the platform lives in /root). On Oracle see docs/RUNBOOK.md.
 set -uo pipefail
 
-SERVER="${SERVER:-root@169.58.36.128}"
+# No default: providers reassign IPs, and the old default is a dead box's.
+SERVER="${SERVER:?set SERVER=root@<ip> — the box to recover}"
 HOST="${SERVER#*@}"
 DOMAIN="${DOMAIN:-cicatrixa.com}"
 
@@ -54,6 +59,11 @@ TXT
 fi
 
 say "stage 2 — SSH answers, repairing the stack"
+# Ship the current check first: a box installed before verify-public.sh existed
+# does not have it, and the stage below ends by running it.
+scp -q -o ConnectTimeout=15 "$(cd "$(dirname "$0")" && pwd)/verify-public.sh" \
+    "$SERVER:/root/cicatrixa-platform/verify-public.sh" 2>/dev/null \
+  || echo "  (could not copy verify-public.sh — the check below says so if it is missing)"
 ssh -o ConnectTimeout=15 "$SERVER" 'bash -s' -- "$DOMAIN" <<'REMOTE'
 set -uo pipefail
 DOMAIN="$1"
@@ -121,36 +131,64 @@ step "bringing the stack up"
 docker compose up -d --remove-orphans
 docker compose ps
 
-step "verifying through Traefik"
-ok80=FAILED; ok443=FAILED
-for i in $(seq 1 45); do
-  if [ "$ok443" = FAILED ]; then
-    c=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
-          --resolve "app.$DOMAIN:443:127.0.0.1" "https://app.$DOMAIN/healthz" 2>/dev/null)
-    [ "$c" = 200 ] && ok443=ok && echo "  :443 -> 200 (${i}s)"
-  fi
-  if [ "$ok80" = FAILED ]; then
-    c=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-          -H "Host: app.$DOMAIN" http://127.0.0.1/healthz 2>/dev/null)
-    case "$c" in 200|301|302|308) ok80=ok; echo "  :80  -> $c (${i}s)" ;; esac
-  fi
-  [ "$ok80" = ok ] && [ "$ok443" = ok ] && break
-  sleep 1
-done
+step "verifying from the internet's point of view"
+# A trusted certificate or nothing: the old check used curl -k and passed on
+# Traefik's self-signed fallback, i.e. on a box the internet could not reach.
+# No BASE_DOMAIN override: the script reads .env, which is what the stack runs
+# with — including when the box's domain differs from the one passed in.
+if [ ! -f ./verify-public.sh ]; then
+  echo "!! verify-public.sh is missing on the box — run platform/deploy.sh to ship the current tree"
+  exit 1
+fi
+bash ./verify-public.sh
+rc=$?
+if [ "$rc" -eq 0 ]; then
+  echo "Redeploy each user project once so its containers get the HTTPS Traefik"
+  echo "labels — they are baked in at container creation."
+fi
+exit "$rc"
+REMOTE
+rc=$?
+[ "$rc" -eq 0 ] || exit "$rc"
 
-echo
-echo "RESULT: :80 $ok80, :443 $ok443"
-if [ "$ok80" = ok ] && [ "$ok443" = ok ]; then
-  echo "✓ app.$DOMAIN is serving. Redeploy each user project once so its containers"
-  echo "  get the HTTPS Traefik labels (they are baked in at container creation)."
-else
-  echo "✗ still not serving — logs follow"
-  docker compose logs --tail=80 traefik control
-  if [ "$ok80" = ok ] && [ "$ok443" = FAILED ]; then
-    echo
-    echo "Only :443 failed, so the certificate never issued. Let's Encrypt validates"
-    echo "over HTTP-01 on :80 — confirm app.$DOMAIN resolves to THIS box and that :80"
-    echo "is open inbound from the internet."
+say "from here — the one check the box cannot do for itself"
+DEST=/root/cicatrixa-platform
+# Ask the box, over one connection, for the domain it serves and the address the
+# internet sees for it. The request below is pinned to THAT address — not to
+# SERVER, which may be a VPN, Tailscale or LAN address that never passes the
+# provider firewall this check exists to see. Laptop-side code avoids bash-4-only
+# features: it runs under macOS's /bin/bash 3.2.
+remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"'
+sshrc=0
+info="$(ssh -o ConnectTimeout=15 "$SERVER" "$remote" 2>&1)" || sshrc=$?
+if [ "$sshrc" -ne 0 ]; then
+  echo "✗ could not reach $SERVER over ssh after the deploy (exit $sshrc): $info" >&2
+  exit 1
+fi
+BOX_DOMAIN="$(printf '%s\n' "$info" | sed -n 's/^D=//p' | tail -1)"
+PUBLIC_IP="$(printf '%s\n' "$info" | sed -n 's/^I=//p' | tail -1)"
+if [ -z "$BOX_DOMAIN" ]; then
+  echo "✗ BASE_DOMAIN is not set in $DEST/.env on the box" >&2
+  exit 1
+fi
+PIN=""
+case "$PUBLIC_IP" in
+  ""|*[!0-9.]*) PUBLIC_IP="" ;;                        # unknown: fall back to DNS
+  *) PIN="app.$BOX_DOMAIN:443:$PUBLIC_IP" ;;
+esac
+# The pin skips DNS, so check the visitor's DNS path on its own.
+if [ -n "$PUBLIC_IP" ] && command -v dig >/dev/null 2>&1; then
+  seen="$(dig +short "app.$BOX_DOMAIN" A 2>/dev/null | tail -1)"
+  if [ "$seen" != "$PUBLIC_IP" ]; then
+    echo "! app.$BOX_DOMAIN resolves to '${seen:-nothing}' from here, not this box ($PUBLIC_IP)" >&2
   fi
 fi
-REMOTE
+echo "→ from here: https://app.$BOX_DOMAIN/healthz${PIN:+  (pinned to $PUBLIC_IP, the public address of the box)}"
+if body="$(curl -sS --max-time 20 ${PIN:+--resolve "$PIN"} "https://app.$BOX_DOMAIN/healthz" 2>&1)" \
+   && printf '%s' "$body" | grep -q '"ok"'; then
+  echo "✓ reachable from the internet: $body"
+else
+  echo "✗ the box says it is up, but it is NOT reachable from here: $body" >&2
+  echo "  check the provider firewall / security list for 80 and 443." >&2
+  exit 1
+fi

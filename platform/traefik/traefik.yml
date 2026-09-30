@@ -24,7 +24,8 @@ providers:
 certificatesResolvers:
   le:
     acme:
-      email: ruslanramazonov99@gmail.com
+      # The ACME account contact. Must be an address the owner reads.
+      email: hello@cicatrixa.com
       storage: /letsencrypt/acme.json
       httpChallenge:
         entryPoint: web

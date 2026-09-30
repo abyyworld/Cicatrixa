@@ -18,9 +18,9 @@ Owner: kenny09077@gmail.com. Cloudflare account: Annolieberto@gmail.com.
 | | `site/` + `vercel.json` | `platform/` |
 |---|---|---|
 | what | static marketing page (one 44KB `index.html`) | the real product: FastAPI control plane + Traefik |
-| runs on | **Vercel** (static) | **VPS 169.58.36.128** (Docker Compose) |
+| runs on | **Vercel** (static) | **any Linux box with Docker** — none live as of 2026-09-30 |
 | serves | `cicatrixa.com`, `www.` | `app.cicatrixa.com`, `*.cicatrixa.com` user apps, `demo.` |
-| deploy | git push → Vercel | `SERVER=root@169.58.36.128 ./platform/deploy.sh` |
+| deploy | git push → Vercel | fresh box: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
 
 There is a **third**, older thing: the repo root (`docker-compose.yml`, `app/`, `healer/`,
 `traefik/`) is the original **self-heal demo** — a seeded-bug FastAPI order service plus the
@@ -31,24 +31,52 @@ five healing agents. It is the YC demo, not the product. On the server it lives 
 
 Cloudflare DNS, zone `85494004e4d82090c4c4f618664caace`, registrar Cloudflare, expires 2027-07-17.
 Nothing in this repo can change a DNS record — there is no Cloudflare API call anywhere in it.
-**Check reality before trusting this table:** `dig +short cicatrixa.com`.
+**Check reality before trusting this table:** `dig +short app.cicatrixa.com`.
 
 ```
-                     TARGET                    AS OF 2026-08-22
-  cicatrixa.com      Vercel                    169.58.36.128   ← wrong, this is the outage
-  www                Vercel                    169.58.36.128   ← via the wildcard
-  app                169.58.36.128             169.58.36.128   ← via the wildcard, no explicit record
-  *                  169.58.36.128             169.58.36.128   ✓
-  demo               169.58.36.128             169.58.36.128   ✓
+                 RECORD TODAY (2026-09-30)                  TARGET
+  cicatrixa.com  CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
+  www            CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
+  app            CNAME → cname.vercel-dns.com  (Vercel) ✗   A → <platform box>, DNS only
+  *              A     → 169.58.36.128  (dead box)      ✗   A → <platform box>, DNS only
 ```
 
-The apex belongs to Vercel and the wildcard to the VPS. Until the first two rows are cut over in
-the Cloudflare dashboard by hand, `cicatrixa.com` reaches the VPS and the Vercel build — however
-green — serves nobody. `docs/RUNBOOK.md` has the exact records.
+The apex and `www` belong to Vercel and must stay there. `app` and `*` need a Linux box running
+Docker. Both records already exist, so they are **edited**, not added: Cloudflare will not create
+an A record beside an existing CNAME of the same name. Then remove `app.cicatrixa.com` from the
+Vercel project so nothing else claims it.
 
-VPS 169.58.36.128, `/root/cicatrixa-platform`:
-- **traefik v3.6** — :80 :443 :8080 (dashboard) :9000 (healer UI). Docker provider on `cxnet`,
-  file provider on the demo's dynamic dir. Let's Encrypt HTTP-01 via resolver `le`.
+## Hosting the platform — what can and cannot run it
+
+The control plane drives a local Docker daemon through `/var/run/docker.sock` (engine, dbprovision,
+medic, metrics, watchdog, main) to build and run customer containers, keeps SQLite in WAL mode on
+a persistent volume, runs always-on loops, and routes wildcard `*.cicatrixa.com` through Traefik.
+So it needs **a Linux host with root and Docker**. Researched and fact-checked 2026-09-30:
+
+- **Firebase / Cloud Run / Functions / App Hosting: cannot run it, at any price.** No Docker daemon
+  (gVisor sandbox, no privileged mode), no lock-safe disk for SQLite (GCS FUSE has no locking; NFS
+  mounts are forced no-lock), loops stall after a response, and wildcard routing needs a ~$18/mo load
+  balancer. Anything server-side on Firebase also needs the Blaze plan, i.e. a card. The only Google
+  route is a rewrite to per-customer Cloud Run services + Firestore — not worth it.
+- **Oracle Cloud Always Free, Ampere A1: the only free host that runs it unchanged.** 2 OCPU / 12 GB
+  ARM64 (halved from 4/24 on 2026-06-15), 200 GB disk, card required but not charged. Risks: Oracle's
+  Cloud Services Agreement limits use to "internal business operations" and bars "service bureau"
+  use — selling hosting on it is plausibly a breach, and Oracle has disabled and deleted Always Free
+  instances in 2026. Treat it as a stopgap and back up `/data/cicatrixa.db` off the box. Its images
+  refuse root SSH, which `deploy.sh` / `recover.sh` need — the runbook has the one-line fix. Customer
+  repos that assume x86 (amd64-only binaries, npm lockfiles missing arm64 optional deps) will fail
+  with "exec format error"; `ai.py` tells the model the host architecture to reduce this.
+- **A ~€5–6/mo x86 VPS (the smallest Hetzner cloud plan, or similar): the clean answer.** No ToS
+  risk, no ARM surprises. Hetzner renamed and repriced its plans in 2026 — check before quoting one.
+- GCP e2-micro (1 GB RAM), AWS (credits, time-limited), Azure (12 months) and every PaaS without a
+  Docker socket were rejected.
+
+`docs/RUNBOOK.md` has the exact steps for a new box of either kind.
+
+On the box, in `/root/cicatrixa-platform` (the repo's `platform/` directory):
+- **cx-traefik** (v3.6) — :80 and :443 public; :8080 dashboard and :9000 healer UI bound to
+  127.0.0.1 only (reach them over an SSH tunnel — Docker-published ports bypass the host firewall).
+  Docker provider on `cxnet`, file provider on `DEMO_DYNAMIC_DIR`. Let's Encrypt HTTP-01 via resolver `le`.
 - **cx-control** — FastAPI on :8090, SQLite at `/data/cicatrixa.db` (volume `cx-data`).
   User app containers run on `cxnet` with **no published host ports** — Traefik routes by label,
   so port collisions are impossible.
@@ -82,8 +110,8 @@ freezes every request in the process.
 ## Failure modes seen so far
 
 1. **Domain pointed at the VPS while the site lives on Vercel** → browser timeout, Cloudflare
-   reports 0 requests (DNS-only records bypass Cloudflare entirely). Open as of 2026-08-22 —
-   it needs a human in the Cloudflare dashboard. See `docs/RUNBOOK.md`.
+   reports 0 requests (DNS-only records bypass Cloudflare entirely). Fixed 2026-08-23 by pointing
+   the apex and `www` at Vercel in the Cloudflare dashboard.
 2. **`.env` never cut over from the `<ip>.nip.io` bootstrap value** → no router matches the real
    host; HTTPS falls back to Traefik's self-signed cert.
 3. **Two stacks fighting** — the demo stack and the platform stack both wanted the container name
@@ -97,8 +125,19 @@ freezes every request in the process.
 
 - Never point `cicatrixa.com` (apex) at the VPS again — it belongs to Vercel.
 - Never publish host ports on user containers; route by Traefik label.
-- Verify a deploy by hitting `/healthz` through Traefik **over HTTPS**, not by "compose said OK".
-  A 3xx from `:80` proves nothing — a redirect to a `:443` that cannot answer is the outage.
+- Verify with `platform/verify-public.sh` on the box, never "compose said OK", never `curl -k`
+  (`-k` accepts Traefik's self-signed fallback, so it passes on a box nobody can reach). It
+  passes only on a **trusted** certificate. A certificate issued *during the run* proves Let's
+  Encrypt reached :80 through public DNS; one issued earlier proves only DNS and the stack, and
+  the script says which. Only a request from **outside** the box sees today's firewall — so
+  `deploy.sh` and `recover.sh` end with one from the laptop. Keep it that way.
+- No router with `tls.certresolver` may name the apex or `www`. Traefik turns every `Host()` in
+  a rule into ONE certificate order; the apex's challenge lands on Vercel, fails, and fails the
+  whole order — `app.` included. The control-plane routers match `app.<domain>` only
+  (a test in `tests/test_engine_config.py` enforces it).
+- User-app routers use the fixed middleware `cx-app-web`, defined on cx-control as a chain over
+  `HTTPS_REDIRECT_MW`. Never bake the switch's value into app labels: labels freeze when a
+  container is created, so the switch would stop reaching running apps.
 - `BASE_URL` must be `https://app.cicatrixa.com`, never the apex: it builds the GitHub App
   callback, referral invite links and the Stripe checkout return URL. Point those at the static
   Vercel page and GitHub install, invites and billing all break silently.

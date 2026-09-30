@@ -16,6 +16,16 @@
 # point: nothing in this stack is tied to the machine it last ran on.
 set -euo pipefail
 
+# Settings the caller may pass. Recorded before anything is defaulted, so a
+# re-run can tell "you passed this" from "the script filled this in" — only the
+# former may overwrite a value already in .env.
+SETTINGS="BASE_DOMAIN BASE_URL OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY
+MAIL_FROM STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET"
+PASSED=""
+for v in $SETTINGS; do
+  [ -n "${!v:-}" ] && PASSED="$PASSED $v"
+done
+
 REPO="${REPO:-https://github.com/abyyworld/cicatrixa.git}"
 DEST="${DEST:-/root/cicatrixa-platform}"
 BASE_DOMAIN="${BASE_DOMAIN:-}"
@@ -31,7 +41,10 @@ case "$BASE_DOMAIN" in
     echo "BASE_DOMAIN=$BASE_DOMAIN is a placeholder. Use ./local.sh for a machine with no domain." >&2
     exit 1 ;;
 esac
-BASE_URL="${BASE_URL:-https://$BASE_DOMAIN}"
+# The app host, not the apex. BASE_URL builds the GitHub App callback, invite
+# links and the Stripe return URL; the apex is usually a marketing site on a
+# static host, and pointing those at it breaks all three without an error.
+BASE_URL="${BASE_URL:-https://app.$BASE_DOMAIN}"
 
 echo "── Docker"
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
@@ -48,17 +61,57 @@ if [ -d "$DEST/.git" ]; then
 else
   # The platform is a subdirectory of the repository, so the checkout lands
   # beside it and the compose file is run from platform/.
+  #
+  # $DEST is replaced wholesale on every run, and .env lives inside it — so it is
+  # carried across explicitly. Without this, re-running the script (which it tells
+  # you to do once DNS resolves) silently wiped every API key and Stripe secret.
+  kept=""
+  if [ -f "$DEST/.env" ]; then
+    kept="$(mktemp)"
+    cp -p "$DEST/.env" "$kept"
+  fi
   rm -rf "$DEST.src"
   git clone --depth 1 "$REPO" "$DEST.src"
   rm -rf "$DEST"
   mv "$DEST.src/platform" "$DEST"
-  mv "$DEST.src" "$DEST/../cicatrixa-src" 2>/dev/null || true
+  rm -rf "$DEST/../cicatrixa-src"
+  mv "$DEST.src" "$DEST/../cicatrixa-src"
+  if [ -n "$kept" ]; then
+    mv "$kept" "$DEST/.env"
+  fi
 fi
 cd "$DEST"
 
 echo "── Settings"
+# Replace or add KEY=VALUE in .env. Written via a temp file so values containing
+# / or & (URLs, keys) need no escaping.
+upsert() {
+  local t; t="$(mktemp)"
+  grep -v "^$1=" .env > "$t" || true
+  printf '%s=%s\n' "$1" "$2" >> "$t"
+  mv "$t" .env
+}
+
 if [ -f .env ]; then
   echo "  keeping the .env already here"
+  had_domain="$(grep -E '^BASE_DOMAIN=' .env | tail -1 | cut -d= -f2-)"
+  if [ -n "$had_domain" ] && [ "$had_domain" != "$BASE_DOMAIN" ]; then
+    echo "  !! BASE_DOMAIN changes: $had_domain -> $BASE_DOMAIN. Every router rule and"
+    echo "     certificate follows it; existing user apps keep their old hostnames until"
+    echo "     each is redeployed."
+    # BASE_URL was derived from the old domain; unless one was passed explicitly,
+    # it has to move too, or the GitHub callback, invite links and Stripe return
+    # URL keep pointing at the old domain.
+    case " $PASSED " in
+      *" BASE_URL "*) ;;
+      *) upsert BASE_URL "https://app.$BASE_DOMAIN"
+         echo "  BASE_URL follows it: https://app.$BASE_DOMAIN" ;;
+    esac
+  fi
+  for v in $PASSED; do
+    upsert "$v" "${!v}"
+    echo "  updated $v from what you passed"
+  done
 else
   cat > .env <<ENV
 BASE_DOMAIN=$BASE_DOMAIN
@@ -73,6 +126,12 @@ STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
 ENV
   echo "  wrote .env for $BASE_DOMAIN"
 fi
+chmod 600 .env
+
+# Traefik watches this directory for the self-heal demo's router. The compose
+# default is the old server's path; on a fresh box point it at an empty one.
+mkdir -p "$DEST/traefik/dynamic"
+grep -q '^DEMO_DYNAMIC_DIR=' .env || printf '\nDEMO_DYNAMIC_DIR=%s\n' "$DEST/traefik/dynamic" >> .env
 
 # The demo stack owns this network on a full server; the compose file joins it
 # as external and will not start without it.
@@ -83,30 +142,16 @@ docker compose build control
 docker compose up -d --remove-orphans
 docker compose ps
 
-echo "── Does the hostname actually answer?"
-ip="$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || echo "")"
-ok=""
-for _ in $(seq 1 30); do
-  code="$(curl -sS -m 10 -o /dev/null -w '%{http_code}' -H "Host: $BASE_DOMAIN" http://127.0.0.1/login || true)"
-  case "$code" in 200|30[0-9]) ok="$code"; break ;; esac
-  sleep 2
-done
-
-echo
-if [ -n "$ok" ]; then
-  echo "  the platform answers for $BASE_DOMAIN through Traefik ($ok)."
-  echo
-  where="${ip:-the IP of this machine}"
-  echo "  Point these at $where, and the certificate issues on the first request:"
-  echo "    A   $BASE_DOMAIN        ${ip:-<ip>}"
-  echo "    A   www.$BASE_DOMAIN    ${ip:-<ip>}"
-  echo "    A   app.$BASE_DOMAIN    ${ip:-<ip>}"
-  echo "    A   *.$BASE_DOMAIN      ${ip:-<ip>}     (the projects people deploy)"
-  echo
-  echo "  If the domain is attached to a static host such as Vercel, remove it there:"
-  echo "  whichever answers DNS wins, and a static host has no control plane on it."
-else
-  echo "  the platform did not answer for $BASE_DOMAIN. What it said:" >&2
-  docker compose logs --tail 40 control >&2
-  exit 1
-fi
+echo "── Is it reachable from the internet?"
+# Not "did compose say OK", and not a curl to 127.0.0.1 — both pass on a box the
+# internet cannot reach. verify-public.sh only goes green once a trusted
+# certificate is being served, which requires Let's Encrypt to have reached :80
+# through public DNS. It exits 2, not 1, when the only thing missing is DNS.
+# Check the domain the stack actually runs with (.env), not merely the one in this
+# shell. Restarting Traefik to retry a certificate is allowed only while no
+# customer app is routed through it — a restart would drop every one of them.
+apps="$(docker ps --filter label=traefik.enable=true --format '{{.Names}}' \
+          | grep -vxE 'cx-control|cx-traefik' || true)"
+allow=1; [ -n "$apps" ] && allow=0
+BASE_DOMAIN="$(grep -E '^BASE_DOMAIN=' .env | tail -1 | cut -d= -f2-)" \
+  VERIFY_ALLOW_RESTART="$allow" ./verify-public.sh

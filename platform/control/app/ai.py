@@ -1,12 +1,19 @@
 """LLM brain of the deploy engine (OpenAI Responses API, heuristic fallbacks)."""
 import json
 import os
+import platform
 import re
 
 import httpx
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 MODEL = os.environ.get("AI_MODEL", "gpt-5.1-codex-mini")
+# Customer images are built and run on this machine's architecture with no
+# emulation. A Dockerfile that pins linux/amd64 or downloads an x86 binary dies
+# with "exec format error" on an ARM host, so the model is told which it is.
+# platform.machine() inside a container reports the host kernel's architecture.
+HOST_ARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64",
+             "arm64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
 
 
 def available() -> bool:
@@ -116,6 +123,14 @@ its routes, or its config), reply instead with ONLY:
 {"need_files": ["relative/path", ...]}   (max 8 files) — you will receive their contents."""
 
 
+def _arch_context() -> str:
+    return (f"Build host: linux/{HOST_ARCH}. Images are built and run on this architecture "
+            f"with no emulation. Never use --platform, never download binaries built for "
+            f"another architecture, and prefer dependencies that ship {HOST_ARCH} builds. "
+            f"'exec format error' in a log means something in the image targets the wrong "
+            f"architecture.\n\n")
+
+
 def _sibling_context(siblings: list[dict] | None) -> str:
     if not siblings:
         return ""
@@ -146,7 +161,8 @@ def build_plan(tree: str, files: dict[str, str], has_dockerfile: bool,
     if not available():
         return None
     blob = "\n".join(f"--- {p} ---\n{c[:4000]}" for p, c in files.items())
-    prompt = (_sibling_context(siblings) + f"Repository file tree:\n{tree[:6000]}\n\n"
+    prompt = (_arch_context() + _sibling_context(siblings)
+              + f"Repository file tree:\n{tree[:6000]}\n\n"
               f"Repo has Dockerfile: {has_dockerfile}\n\nKey files:\n{blob[:40000]}")
     try:
         plan = _ask_with_files(PLAN_INSTRUCTIONS, prompt, read_file)
@@ -174,7 +190,7 @@ def fix_plan(dockerfile: str, error_log: str, tree: str, files: dict[str, str],
     if not available():
         return None
     blob = "\n".join(f"--- {p} ---\n{c[:3000]}" for p, c in files.items())
-    prompt = (_sibling_context(siblings) +
+    prompt = (_arch_context() + _sibling_context(siblings) +
               f"Current Dockerfile:\n{dockerfile}\n\nFailure log (tail):\n{error_log[-12000:]}"
               f"\n\nFile tree:\n{tree[:4000]}\n\nKey files:\n{blob[:20000]}")
     try:
@@ -355,9 +371,9 @@ def heuristic_plan(root: str) -> dict:
         return {"dockerfile": df, "port": 3000, "health_path": "/",
                 "notes": "heuristic: node app"}
     if has("requirements.txt", "pyproject.toml"):
-        req = ("COPY requirements.txt ./\nRUN pip install --no-cache-dir -r requirements.txt\n"
+        req = ("COPY requirements.txt ./\nRUN pip install --no-cache-dir --prefer-binary -r requirements.txt\n"
                if has("requirements.txt") else
-               "COPY pyproject.toml ./\nRUN pip install --no-cache-dir .\n")
+               "COPY pyproject.toml ./\nRUN pip install --no-cache-dir --prefer-binary .\n")
         entry = next((f for f in ("main.py", "app.py", "server.py", "run.py")
                       if op.exists(op.join(root, f))), "main.py")
         mod = entry[:-3]
