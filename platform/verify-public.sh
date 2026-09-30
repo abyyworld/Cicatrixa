@@ -97,9 +97,10 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
   if [ "$rc" -eq 0 ] && [ "$code" = "200" ]; then
     issued="$(cert_issued_at)"
     echo
-    # Let's Encrypt backdates notBefore by exactly one hour. Allow that plus five
-    # minutes of clock skew — a wider window would call a certificate from an
-    # earlier run "just now" and credit it with reachability it never proved.
+    # Let's Encrypt backdates notBefore by a little under an hour (about 58.5 min).
+    # Allow 65 min in all — backdate plus clock skew. A wider window would call a
+    # certificate from an earlier run "just now" and credit it with reachability
+    # it never proved.
     if [ -n "$issued" ] && [ "$issued" -ge $((START - 3600 - 300)) ]; then
       echo "✓ $HOST is live: DNS points here and Let's Encrypt issued a trusted certificate"
       echo "  just now, which it can only do after reaching this box on :80 from the internet."

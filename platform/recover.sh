@@ -153,22 +153,37 @@ rc=$?
 
 say "from here — the one check the box cannot do for itself"
 DEST=/root/cicatrixa-platform
-# Check the host THIS box serves — read from its .env, not assumed — and send the
-# request to THIS box when SERVER is an address. Otherwise the laptop's DNS picks
-# the machine, and a different box (production, or a stale cached one) could
-# answer "ok" for this one. Written for macOS's bash 3.2: no empty-array expansion.
-BOX_DOMAIN="$(ssh "$SERVER" "grep -E '^BASE_DOMAIN=' $DEST/.env | tail -1 | cut -d= -f2-" 2>/dev/null || true)"
-if [ -z "$BOX_DOMAIN" ]; then
-  echo "✗ could not read BASE_DOMAIN from $DEST/.env on the box" >&2
+# Ask the box, over one connection, for the domain it serves and the address the
+# internet sees for it. The request below is pinned to THAT address — not to
+# SERVER, which may be a VPN, Tailscale or LAN address that never passes the
+# provider firewall this check exists to see. Laptop-side code avoids bash-4-only
+# features: it runs under macOS's /bin/bash 3.2.
+remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"'
+sshrc=0
+info="$(ssh -o ConnectTimeout=15 "$SERVER" "$remote" 2>&1)" || sshrc=$?
+if [ "$sshrc" -ne 0 ]; then
+  echo "✗ could not reach $SERVER over ssh after the deploy (exit $sshrc): $info" >&2
   exit 1
 fi
-TARGET="${SERVER#*@}"
+BOX_DOMAIN="$(printf '%s\n' "$info" | sed -n 's/^D=//p' | tail -1)"
+PUBLIC_IP="$(printf '%s\n' "$info" | sed -n 's/^I=//p' | tail -1)"
+if [ -z "$BOX_DOMAIN" ]; then
+  echo "✗ BASE_DOMAIN is not set in $DEST/.env on the box" >&2
+  exit 1
+fi
 PIN=""
-case "$TARGET" in
-  ""|*[!0-9.]*) ;;                                  # a hostname or ssh alias: use DNS
-  *) PIN="app.$BOX_DOMAIN:443:$TARGET" ;;           # an IPv4 address: go straight to it
+case "$PUBLIC_IP" in
+  ""|*[!0-9.]*) PUBLIC_IP="" ;;                        # unknown: fall back to DNS
+  *) PIN="app.$BOX_DOMAIN:443:$PUBLIC_IP" ;;
 esac
-echo "→ from here: https://app.$BOX_DOMAIN/healthz${PIN:+  (pinned to $TARGET)}"
+# The pin skips DNS, so check the visitor's DNS path on its own.
+if [ -n "$PUBLIC_IP" ] && command -v dig >/dev/null 2>&1; then
+  seen="$(dig +short "app.$BOX_DOMAIN" A 2>/dev/null | tail -1)"
+  if [ "$seen" != "$PUBLIC_IP" ]; then
+    echo "! app.$BOX_DOMAIN resolves to '${seen:-nothing}' from here, not this box ($PUBLIC_IP)" >&2
+  fi
+fi
+echo "→ from here: https://app.$BOX_DOMAIN/healthz${PIN:+  (pinned to $PUBLIC_IP, the public address of the box)}"
 if body="$(curl -sS --max-time 20 ${PIN:+--resolve "$PIN"} "https://app.$BOX_DOMAIN/healthz" 2>&1)" \
    && printf '%s' "$body" | grep -q '"ok"'; then
   echo "✓ reachable from the internet: $body"
