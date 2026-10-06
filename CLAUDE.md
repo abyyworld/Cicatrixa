@@ -20,7 +20,7 @@ Owner: kenny09077@gmail.com. Cloudflare account: Annolieberto@gmail.com.
 | what | static marketing page (one 44KB `index.html`) | the real product: FastAPI control plane + Traefik |
 | runs on | **Vercel** (static) | **any Linux box with Docker** — none live as of 2026-09-30 |
 | serves | `cicatrixa.com`, `www.` | `app.cicatrixa.com`, `*.cicatrixa.com` user apps, `demo.` |
-| deploy | git push → Vercel | fresh box: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
+| deploy | git push → Vercel | new box: paste `platform/first-boot.sh`'s stub into cloud-init; by hand: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
 
 There is a **third**, older thing: the repo root (`docker-compose.yml`, `app/`, `healer/`,
 `traefik/`) is the original **self-heal demo** — a seeded-bug FastAPI order service plus the
@@ -63,7 +63,7 @@ So it needs **a Linux host with root and Docker**. Researched and fact-checked 2
   Cloud Services Agreement limits use to "internal business operations" and bars "service bureau"
   use — selling hosting on it is plausibly a breach, and Oracle has disabled and deleted Always Free
   instances in 2026. Treat it as a stopgap and back up `/data/cicatrixa.db` off the box. Its images
-  refuse root SSH, which `deploy.sh` / `recover.sh` need — the runbook has the one-line fix. Customer
+  refuse root SSH, which `deploy.sh` / `recover.sh` need — `first-boot.sh` fixes it at first boot. Customer
   repos that assume x86 (amd64-only binaries, npm lockfiles missing arm64 optional deps) will fail
   with "exec format error"; `ai.py` tells the model the host architecture to reduce this.
 - **A ~€5–6/mo x86 VPS (the smallest Hetzner cloud plan, or similar): the clean answer.** No ToS
@@ -145,6 +145,8 @@ freezes every request in the process.
   (`healer/deployer.py:_write_weights`). Anything hand-edited into that file must also be
   emitted there or it survives only until the next heal.
 - Secrets live only in `platform/.env` on the server. `.env.example` is the template.
+  Never in cloud-init user data: the cloud's metadata service (169.254.169.254) hands it to
+  any process that asks, and customer containers can reach it.
 - Never let a caller pick a verification level. `verify.level_for(evidence)` decides;
   `assert_supported()` raises on anything higher. One dishonest record is permanent and
   silent, because nothing downstream re-derives it.

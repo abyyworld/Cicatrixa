@@ -85,11 +85,15 @@ The old VPS (169.58.36.128) is gone. A new one is one command plus two DNS recor
    Do not open 8080 or 9000.
 4. **Compute → Create instance**: image **Canonical Ubuntu 24.04** (not Oracle Linux — Docker's
    installer rejects it), shape **Ampere VM.Standard.A1.Flex, 2 OCPU / 12 GB** — nothing larger,
-   public subnet, "Assign a public IPv4 address" on, your SSH key. "Out of host capacity" means try
-   another availability domain, or retry later.
+   public subnet, "Assign a public IPv4 address" on, your SSH key, boot volume **100 GB** (the
+   free allowance is 200 GB in all). "Out of host capacity" means try another availability
+   domain, or retry later. Under **Show advanced options → Management → Paste cloud-init script**,
+   paste the three lines from [Hands-off](#hands-off-paste-this-when-you-create-the-instance)
+   below — then the box installs itself and steps 5 and the bootstrap command are done for you.
 
-5. **Let root log in with your key.** Oracle's images refuse root SSH, and `deploy.sh`,
-   `recover.sh` and the backup below all need it (the platform lives in `/root`):
+5. **Let root log in with your key** (skip if you pasted the cloud-init script). Oracle's
+   images refuse root SSH, and `deploy.sh`, `recover.sh` and the backup below all need it (the
+   platform lives in `/root`):
 
    ```bash
    ssh ubuntu@<new-ip> 'sudo install -m600 ~ubuntu/.ssh/authorized_keys /root/.ssh/authorized_keys'
@@ -107,6 +111,40 @@ chains and takes every app offline from outside: `netfilter-persistent start|res
 `systemctl restart netfilter-persistent`, and an `apt upgrade` of `netfilter-persistent` or
 `iptables-persistent` (its install script restarts the service). The fix is
 `systemctl restart docker`, then check from outside: `curl -sS https://app.cicatrixa.com/healthz`.
+
+### Hands-off: paste this when you create the instance
+
+Any provider with a cloud-init / "user data" box (Oracle, Hetzner, most others) can install the
+platform on first boot. Paste exactly this:
+
+```bash
+#!/bin/bash
+curl -fsSL --retry 10 --retry-all-errors -o /root/first-boot.sh \
+  https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/first-boot.sh
+BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=hello@cicatrixa.com bash /root/first-boot.sh
+```
+
+**No API keys in it.** The metadata service at 169.254.169.254 hands user data to any process
+on the box that asks, and customer containers can reach it. Add keys over SSH afterwards (below).
+
+`first-boot.sh` gives root your SSH key where the image refuses root logins, runs
+`bootstrap.sh`, and then — if DNS does not point at the box yet — keeps checking every minute
+in the background (unit `cicatrixa-go-live`, for up to 72 h). Once DNS points here it gets the
+certificate and the site goes live with nobody logged in. Set the DNS records below as soon
+as the console shows the instance's public IP; the order does not matter any more.
+
+```bash
+ssh ubuntu@<new-ip> sudo tail -f /var/log/cicatrixa-first-boot.log    # watch it
+http://<new-ip>/healthz        # in a browser, before DNS: {"ok":true} means 80 is open and the stack is up
+```
+
+It ends with `LIVE: https://app.cicatrixa.com`, or `FAILED:` / `GAVE UP` and the reason.
+Then add the keys, as root on the box (`.env` keeps everything else):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/bootstrap.sh \
+  | BASE_DOMAIN=cicatrixa.com OPENAI_API_KEY=sk-... bash
+```
 
 ### Every box — DNS first, then one command
 
