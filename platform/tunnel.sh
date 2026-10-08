@@ -17,10 +17,10 @@
 #   git pull && ./tunnel.sh
 #   ./tunnel.sh stop          # take it offline, keep every account and project
 #
+# ADMIN_EMAILS is required: the address you will sign up with yourself. Without
+# it, whoever signs up first on the live site would be the admin.
 # Also accepted on any run, written into .env and kept: OPENAI_API_KEY,
-# ADMIN_EMAILS, RESEND_API_KEY, MAIL_FROM, STRIPE_SECRET_KEY,
-# STRIPE_WEBHOOK_SECRET, AI_MODEL. Pass ADMIN_EMAILS (your own address) on the
-# first run: without it, whoever signs up first on the live site is the admin.
+# RESEND_API_KEY, MAIL_FROM, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, AI_MODEL.
 #
 # The machine IS the server: while it sleeps or is off, the site shows a
 # Cloudflare error. Customer containers run on it, so prefer one that holds
@@ -31,7 +31,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
 case "${1:-start}" in
-  stop)  docker compose down; exit 0 ;;
+  stop)
+    docker compose down
+    # Customer apps and databases are not part of the compose project. Stop them
+    # too — offline means their code stops running here — but keep them: the
+    # watchdog starts them again after the next ./tunnel.sh.
+    ids="$(docker ps -q --filter label=cx.service; docker ps -q --filter label=cx.database)"
+    [ -z "$ids" ] || docker stop $ids >/dev/null
+    exit 0 ;;
   start) ;;
   *) echo "usage: $0 [start|stop]" >&2; exit 2 ;;
 esac
@@ -83,6 +90,14 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
+ADMIN_EMAILS="${ADMIN_EMAILS:-$(current ADMIN_EMAILS)}"
+if [ -z "$ADMIN_EMAILS" ]; then
+  echo "set ADMIN_EMAILS — the address you will sign up with yourself. Without it the" >&2
+  echo "first account made on the live site, by anyone, would be the admin." >&2
+  exit 1
+fi
+OWNER="${ADMIN_EMAILS%%,*}"
+
 echo "── Settings"
 upsert BASE_DOMAIN "$BASE_DOMAIN"
 # The app host, never the apex: it builds the GitHub App callback, invite links
@@ -92,8 +107,9 @@ upsert CLOUDFLARE_TUNNEL_TOKEN "$TOKEN"
 upsert COMPOSE_PROFILES tunnel
 # Traefik sees plain HTTP from the tunnel even when the visitor used HTTPS, so its
 # own redirect would send every request back to Cloudflare in a loop. Cloudflare's
-# "Always Use HTTPS" does that job at the edge instead (verify-public.sh checks it).
-upsert HTTPS_REDIRECT_MW cx-plain
+# "Always Use HTTPS" does that job at the edge instead (verify-public.sh checks it),
+# and cx-tunnel tells apps the request was HTTPS (docker-compose.yml).
+upsert HTTPS_REDIRECT_MW cx-tunnel
 for v in OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY MAIL_FROM \
          STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
   if [ -n "${!v:-}" ]; then
@@ -103,29 +119,31 @@ for v in OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY MAIL_FROM \
 done
 
 # Nothing needs a port open to the network: the tunnel reaches Traefik over the
-# cxnet network. So Traefik's ports bind to loopback only, away from the ports a
-# laptop usually has taken already. Chosen once, then kept in .env.
-taken() { command -v lsof >/dev/null && lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
-pick() {  # pick <var> <port>...
-  local var="$1" p; shift
-  [ -n "$(current "$var")" ] && return 0
-  for p in "$@"; do
-    if ! taken "$p"; then upsert "$var" "127.0.0.1:$p"; return 0; fi
-  done
-  upsert "$var" "127.0.0.1:$1"
-}
-pick CX_HTTP_PORT 8000 8001 8002 8880
-pick CX_HTTPS_PORT 8443 8444 8445
-pick CX_TRAEFIK_PORT 8081 8082 8083
-pick CX_HEALER_PORT 9001 9002 9003
+# cxnet network. So Traefik's ports bind to loopback only, each on a free port
+# Docker picks ("127.0.0.1:" — no fixed number to collide with whatever this
+# machine already runs). `docker compose port traefik 80` says which.
+for v in CX_HTTP_PORT CX_HTTPS_PORT CX_TRAEFIK_PORT CX_HEALER_PORT; do
+  [ -n "$(current "$v")" ] || upsert "$v" "127.0.0.1:"
+done
 
 # Traefik watches this directory for the self-heal demo's router; the compose
-# default is a server path. An empty directory is fine.
-if [ -z "$(current DEMO_DYNAMIC_DIR)" ]; then
-  upsert DEMO_DYNAMIC_DIR "$(cd "$HERE/.." && pwd)/traefik/dynamic"
+# default is a server path. An empty directory is fine — but one this machine
+# cannot create (a /root/... copied from .env.example) is replaced, not fatal.
+dyn="$(current DEMO_DYNAMIC_DIR)"
+if [ -z "$dyn" ] || ! mkdir -p "$dyn" 2>/dev/null; then
+  dyn="$(cd "$HERE/.." && pwd)/traefik/dynamic"
+  upsert DEMO_DYNAMIC_DIR "$dyn"
+  mkdir -p "$dyn"
 fi
-mkdir -p "$(current DEMO_DYNAMIC_DIR)"
 echo "  .env is set for https://app.$BASE_DOMAIN through a Cloudflare tunnel"
+
+# Compose prefers a variable in its environment over the same one in .env. Hand it
+# what was just written — above all the token taken OUT of a pasted install line,
+# which would otherwise reach cloudflared whole — and drop anything that would
+# put Traefik's ports back on the network.
+export BASE_DOMAIN BASE_URL="https://app.$BASE_DOMAIN" CLOUDFLARE_TUNNEL_TOKEN="$TOKEN" \
+       COMPOSE_PROFILES=tunnel HTTPS_REDIRECT_MW=cx-tunnel ADMIN_EMAILS DEMO_DYNAMIC_DIR="$dyn"
+unset CX_HTTP_PORT CX_HTTPS_PORT CX_TRAEFIK_PORT CX_HEALER_PORT
 
 # The compose file joins the self-heal demo's network as external; nothing
 # creates it on a machine where the demo has never run.
@@ -154,11 +172,14 @@ rc=0
 echo
 case "$rc" in
   0) echo "  Cicatrixa is live: https://app.$BASE_DOMAIN"
-     if [ -n "$(current ADMIN_EMAILS)" ]; then
-       echo "  Sign up at https://app.$BASE_DOMAIN/signup as $(current ADMIN_EMAILS) to be the admin."
+     echo "  Sign up at https://app.$BASE_DOMAIN/signup as $OWNER."
+     if [ -n "$(current RESEND_API_KEY)" ]; then
+       echo "  Entering the code emailed to you makes you the admin."
      else
-       echo "  Sign up at https://app.$BASE_DOMAIN/signup NOW: with no ADMIN_EMAILS set, the"
-       echo "  first account on a new install is the admin, whoever makes it."
+       # Email is off, so signing up proves nothing about who you are — anyone can
+       # type your address. Admin comes from a shell on this machine instead.
+       echo "  Then, on this machine, make yourself the admin:"
+       echo "    docker exec cx-control python -m app.promote $OWNER"
      fi
      echo "  Keep this machine on and awake: it is the server." ;;
   2) echo "  The stack is running here. Finish what is listed above in the Cloudflare"

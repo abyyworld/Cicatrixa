@@ -98,6 +98,20 @@ services:
       # container is created — so flipping HTTPS_REDIRECT_MW and recreating
       # cx-control re-points every running app at once, no redeploys.
       - "traefik.http.middlewares.cx-app-web.chain.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https}"
+      # HTTPS_REDIRECT_MW=cx-tunnel (tunnel.sh). TLS ended at Cloudflare, and Traefik's
+      # plain :80 entrypoint overwrites the X-Forwarded-Proto: https that cloudflared
+      # passes on with "http" — so an app that forces HTTPS (Rails force_ssl, Django
+      # SECURE_SSL_REDIRECT, Express on req.secure) would redirect forever, and its
+      # secure cookies never stick. Every request here did arrive over HTTPS:
+      # Cloudflare's Always Use HTTPS redirects the rest before they reach the tunnel.
+      # No compress either: it holds a response's headers until its first byte, and
+      # Cloudflare cuts a response with no headers after ~100 s (live logs, SSE).
+      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Port=443"
+      # Cloudflare would otherwise keep apps' .js/.css/images at its edge for hours,
+      # and nothing here can purge it after a redeploy or a heal. Browsers' own
+      # caching is untouched: this header is read by Cloudflare alone.
+      - "traefik.http.middlewares.cx-tunnel.headers.customresponseheaders.Cloudflare-CDN-Cache-Control=no-store"
       # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
       - "traefik.http.routers.cx-control-secure.rule=Host(`app.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control-secure.entrypoints=websecure"
@@ -115,7 +129,9 @@ services:
     image: cloudflare/cloudflared:2026.9.3
     container_name: cx-tunnel
     profiles: [tunnel]
-    command: tunnel --no-autoupdate run
+    # Metrics on loopback: on its default 0.0.0.0 every customer container on cxnet
+    # could read /config and /debug/pprof. verify-public.sh asks it `ready` from inside.
+    command: tunnel --no-autoupdate --metrics 127.0.0.1:20241 run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
     networks: [cxnet]

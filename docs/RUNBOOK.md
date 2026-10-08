@@ -125,7 +125,14 @@ git clone https://github.com/abyyworld/cicatrixa.git && cd cicatrixa/platform
 BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN='eyJ...' ADMIN_EMAILS=you@example.com ./tunnel.sh
 ```
 
-`ADMIN_EMAILS` is the address you will sign up with yourself (comma-separate several).
+`ADMIN_EMAILS` is the address you will sign up with yourself (comma-separate several);
+`tunnel.sh` will not start without it. Signing up with it does **not** make you admin by
+itself — with email off, anyone could type it. Either the emailed code proves it (needs
+`RESEND_API_KEY`), or, after you sign up, run this on the machine:
+
+```bash
+docker exec cx-control python -m app.promote you@example.com
+```
 
 Add `OPENAI_API_KEY=sk-...` (and `RESEND_API_KEY`, Stripe keys) on the same line when you have
 them; everything is kept in `platform/.env` (mode 600, never committed). It ends with
@@ -135,9 +142,14 @@ subdomain arrives too:
 
 | result | meaning |
 |---|---|
-| `✓ … is live through the Cloudflare tunnel` (exit 0) | sign up at `https://app.cicatrixa.com/signup` with an address in `ADMIN_EMAILS` to be the admin. Without `ADMIN_EMAILS`, the first account on a new install is the admin, whoever makes it |
-| `… PENDING` (exit 2) | the stack and tunnel run here; a DNS record or route is missing — it prints exactly which, with the tunnel ID filled in |
+| `✓ … is live through the Cloudflare tunnel` (exit 0) | sign up at `https://app.cicatrixa.com/signup` as your `ADMIN_EMAILS` address, then become admin as above (the script prints the command) |
+| `… PENDING` (exit 2) | the stack runs here; a DNS record or route is missing, Always Use HTTPS is off, or the tunnel has not connected — it says which, with the tunnel ID filled in |
 | `✗` (exit 1) | stack down, tunnel not connected (a wrong token shows in the tunnel's log it prints), or a route pointing somewhere other than `cx-traefik:80` |
+
+What tunnel mode does for every app, so nobody has to: it tells apps the request was HTTPS
+(Traefik only sees plain HTTP from the tunnel, and an app that forces HTTPS would otherwise
+redirect forever), and it tells Cloudflare not to cache them (nothing here can purge its cache
+after a redeploy). The visitor's address reaches apps as the `CF-Connecting-IP` header.
 
 Updating later, or after a reboot (`restart: unless-stopped` brings it back on its own once
 Docker starts): `git pull && ./tunnel.sh`. Taking it offline: `./tunnel.sh stop`. Moving it to a
@@ -201,7 +213,7 @@ platform on first boot. Paste exactly this:
 #!/bin/bash
 curl -fsSL --retry 10 --retry-all-errors -o /root/first-boot.sh \
   https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/first-boot.sh
-BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=hello@cicatrixa.com bash /root/first-boot.sh
+BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=you@example.com bash /root/first-boot.sh
 ```
 
 **No API keys in it.** The metadata service at 169.254.169.254 hands user data to any process
@@ -245,13 +257,13 @@ claims it. Then:
 # Hetzner and most VPSes log you in as root:
 ssh root@<new-ip>
 curl -fsSL https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/bootstrap.sh \
-  | BASE_DOMAIN=cicatrixa.com OPENAI_API_KEY=sk-... ADMIN_EMAILS=hello@cicatrixa.com bash
+  | BASE_DOMAIN=cicatrixa.com OPENAI_API_KEY=sk-... ADMIN_EMAILS=you@example.com bash
 
 # Oracle logs you in as ubuntu. The variables go AFTER sudo — sudo drops any
 # set before it, and the script would stop with "set BASE_DOMAIN":
 ssh ubuntu@<new-ip>
 curl -fsSL https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/bootstrap.sh \
-  | sudo BASE_DOMAIN=cicatrixa.com OPENAI_API_KEY=sk-... ADMIN_EMAILS=hello@cicatrixa.com bash
+  | sudo BASE_DOMAIN=cicatrixa.com OPENAI_API_KEY=sk-... ADMIN_EMAILS=you@example.com bash
 ```
 
 `BASE_URL` defaults to `https://app.cicatrixa.com`. Re-running is safe: `.env` is kept, and any
@@ -336,7 +348,7 @@ SERVER=root@169.58.36.128 ./deploy.sh
 From your laptop, prove it end to end:
 
 ```bash
-curl -I  http://app.cicatrixa.com/healthz      # expect 301 -> https
+curl -I  http://app.cicatrixa.com/healthz      # expect 302 -> https
 curl -sI https://app.cicatrixa.com/healthz     # expect 200
 curl -s  https://cicatrixa.com | head -5       # expect the marketing HTML from Vercel
 ```
@@ -350,6 +362,7 @@ answering at all:
 |---|---|---|
 | `app.cicatrixa.com/signup` is a 404, or the marketing page | `app` still points at Vercel — no control plane anywhere | bring one up: "Free: Cloudflare Tunnel" or a box above |
 | signup works, then "enter your code" and no email ever arrives | `RESEND_API_KEY` is set but Resend refuses to send — usually the sending domain is not verified, which only lets the Resend account's owner receive mail | `/admin` shows Resend's last answer; verify the domain at resend.com/domains, or remove the key (then signups skip the code) |
+| you signed up but are not admin | an address in `ADMIN_EMAILS` becomes admin only once its emailed code is entered — with email off, nothing proves it is yours | on the server: `docker exec cx-control python -m app.promote you@example.com` |
 | someone forgot their password | — | "Forgot your password?" on the login page emails a one-hour, one-use link. With email off or failing: `/admin` → **reset pw** next to the user, and send them the link yourself |
 
 ## What each check proves

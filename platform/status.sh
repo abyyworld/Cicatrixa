@@ -12,6 +12,15 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# In tunnel mode (tunnel.sh) app.<domain> is a proxied CNAME to the tunnel: it
+# resolves to Cloudflare by design, and there is no server address for it to
+# match. Everything below would call that broken. verify-public.sh checks this
+# setup the way a visitor reaches it.
+if [ -f "$HERE/.env" ] && grep -E '^COMPOSE_PROFILES=' "$HERE/.env" | tail -1 | cut -d= -f2- \
+     | tr -d "\"'" | tr ', ' '\n\n' | grep -qx tunnel; then
+  echo "tunnel mode (.env): checking the way a visitor arrives, through Cloudflare"
+  exec "$HERE/verify-public.sh"
+fi
 [ -f "$HERE/.env" ] && eval "$(grep -E '^(BASE_DOMAIN|SERVER)=' "$HERE/.env" || true)"
 DOMAIN="${DOMAIN:-${BASE_DOMAIN:-cicatrixa.com}}"
 SERVER="${SERVER:-root@169.58.36.128}"

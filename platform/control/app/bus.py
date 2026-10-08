@@ -27,12 +27,25 @@ def _fanout(channel: str, msg: dict):
             queue.put_nowait(msg)
 
 
+# Seconds of quiet before a comment line goes out. Behind Cloudflare (tunnel mode)
+# a response that sends nothing for ~100 s is cut with a 524, and EventSource does
+# not reconnect after an error status — live logs and medic replies just stop.
+HEARTBEAT = 20
+
+
 async def subscribe(channel: str):
     queue: asyncio.Queue = asyncio.Queue()
     _subscribers[channel].add(queue)
     try:
+        # Something at once, so the response starts now rather than at the first
+        # event (a compressing proxy holds the headers until the first byte).
+        yield ": connected\n\n"
         while True:
-            msg = await queue.get()
+            try:
+                msg = await asyncio.wait_for(queue.get(), HEARTBEAT)
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"
+                continue
             yield f"event: {msg['event']}\ndata: {json.dumps(msg['data'])}\n\n"
     finally:
         _subscribers[channel].discard(queue)

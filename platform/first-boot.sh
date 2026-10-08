@@ -10,7 +10,7 @@
 #   #!/bin/bash
 #   curl -fsSL --retry 10 --retry-all-errors -o /root/first-boot.sh \
 #     https://raw.githubusercontent.com/abyyworld/cicatrixa/main/platform/first-boot.sh
-#   BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=hello@cicatrixa.com bash /root/first-boot.sh
+#   BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=you@example.com bash /root/first-boot.sh
 #
 # No API keys in there. The cloud's metadata service hands user data to any
 # process on the box that asks, customer containers included. Add keys over SSH

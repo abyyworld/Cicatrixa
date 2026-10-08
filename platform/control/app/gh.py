@@ -69,8 +69,11 @@ def build_manifest(base_url: str) -> dict:
         "hook_attributes": {"url": f"{base_url}/api/webhooks/github", "active": True},
         "redirect_url": f"{base_url}/admin/github/callback",
         "callback_urls": [f"{base_url}/connect/github/callback"],
-        "setup_url": f"{base_url}/connect/github/setup",
-        "setup_on_update": False,
+        # After installing, GitHub asks the installer to authorize the App and sends
+        # them to the callback with an OAuth code. That code is the only proof of
+        # whose installation it is (main.connect_setup); without it any account
+        # could claim any installation id. GitHub allows no setup_url alongside it.
+        "request_oauth_on_install": True,
         "public": True,
         # pull_requests:write is what PR mode needs. GitHub keeps EXISTING
         # installations on the permissions they already accepted, so adding it
@@ -94,7 +97,43 @@ def exchange_manifest_code(code: str) -> dict:
     db.set_setting("gh_app_webhook_secret", data["webhook_secret"] or "")
     db.set_setting("gh_app_client_id", data.get("client_id", ""))
     db.set_setting("gh_app_client_secret", data.get("client_secret", ""))
+    db.set_setting("gh_app_oauth_on_install", "1")   # what build_manifest asked for
     return data
+
+
+def oauth_on_install() -> bool:
+    """True for an App created from build_manifest since it asks for authorization
+    on install — so a return from GitHub without an OAuth code is not to be trusted."""
+    return db.setting("gh_app_oauth_on_install") == "1"
+
+
+def user_installation_ids(code: str) -> set[int] | None:
+    """Trade the OAuth code GitHub sends after an install for the installer's own
+    token, and return the ids of this App's installations they can see. None if
+    the code cannot be used."""
+    client_id = db.setting("gh_app_client_id")
+    secret = db.setting("gh_app_client_secret")
+    if not (code and client_id and secret):
+        return None
+    try:
+        r = httpx.post("https://github.com/login/oauth/access_token",
+                       data={"client_id": client_id, "client_secret": secret,
+                             "code": code},
+                       headers={"Accept": "application/json"}, timeout=20)
+        token = r.json().get("access_token") if r.status_code == 200 else None
+        if not token:
+            return None
+        ids: set[int] = set()
+        page = 1
+        while True:
+            found = _get(token, "/user/installations",
+                         {"per_page": 100, "page": page}).get("installations", [])
+            ids.update(i["id"] for i in found)
+            if len(found) < 100:
+                return ids
+            page += 1
+    except Exception:
+        return None
 
 
 def _app_jwt() -> str:

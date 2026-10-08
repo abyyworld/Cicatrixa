@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
 
@@ -22,8 +23,12 @@ BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
 HTTPS_ENABLED = BASE_URL.startswith("https://")
 NETWORK = os.environ.get("CX_NETWORK", "cxnet")
 WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
-# Named volume backing /data — mounted into ephemeral test containers.
-DATA_VOLUME = os.environ.get("CX_DATA_VOLUME", "cx-data")
+# Named volume backing /data — mounted into ephemeral test containers. Compose
+# prefixes volume names with the project (platform_cx-data, cicatrixa-platform_cx-data),
+# so unless CX_DATA_VOLUME says otherwise, data_volume() asks Docker what is
+# actually mounted at /data here. Mounting the bare name created a separate, empty
+# volume, and every test run saw no code.
+DATA_VOLUME = os.environ.get("CX_DATA_VOLUME", "")
 MAX_ATTEMPTS = 3
 COMMON_PORTS = [3000, 8000, 8080, 5000, 80, 4000, 8501, 5173, 9000, 3001]
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
@@ -59,6 +64,19 @@ def dock() -> docker.DockerClient:
     if _docker is None:
         _docker = docker.from_env()
     return _docker
+
+
+def data_volume() -> str:
+    global DATA_VOLUME
+    if not DATA_VOLUME:
+        try:
+            me = dock().containers.get(socket.gethostname())
+            DATA_VOLUME = next(m["Name"] for m in me.attrs.get("Mounts", [])
+                               if m.get("Destination") == "/data"
+                               and m.get("Type") == "volume")
+        except Exception:
+            return "cx-data"   # not in a container (tests, local run): nothing better known
+    return DATA_VOLUME
 
 
 def service_url(slug: str) -> str:
@@ -348,7 +366,7 @@ def test_runner(image: str, workdir: str, timeout: int = 600):
     def run(command: str) -> tuple[int, str]:
         container = dock().containers.run(
             image, entrypoint="", command=["sh", "-lc", command],
-            volumes={DATA_VOLUME: {"bind": "/data", "mode": "rw"}},
+            volumes={data_volume(): {"bind": "/data", "mode": "rw"}},
             working_dir=workdir,
             mem_limit=f"{RAM_PER_CONTAINER_MB}m",
             nano_cpus=int(CPU_PER_CONTAINER * 1e9),
@@ -403,8 +421,11 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
             labels[f"traefik.http.routers.{router}.rule"] = rule
             labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
             labels[f"traefik.http.routers.{router}.service"] = f"cx-{slug}"
-            if strip_mw:
-                labels[f"traefik.http.routers.{router}.middlewares"] = strip_mw
+            # The :80 bridge is the whole bridge in tunnel mode, so it needs what the
+            # app's own :80 router gets (APP_WEB_MW) — first, before any prefix strip.
+            web_mws = ([APP_WEB_MW] if HTTPS_ENABLED else []) + ([strip_mw] if strip_mw else [])
+            if web_mws:
+                labels[f"traefik.http.routers.{router}.middlewares"] = ",".join(web_mws)
             if HTTPS_ENABLED:
                 # frontends are served over https, so their /api fetches land on :443 too
                 sec = f"{router}-secure"

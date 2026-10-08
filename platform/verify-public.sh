@@ -60,7 +60,15 @@ say() { printf '  %s\n' "$*"; }
 # for an outside check to see. tunnel.sh runs this on macOS too: bash 3.2, no
 # GNU-only flags, no getent, in this branch.
 tunnel_mode() {
-  grep -qE '^COMPOSE_PROFILES=([^#]*,)?tunnel([,[:space:]]|$)' .env 2>/dev/null
+  grep -E '^COMPOSE_PROFILES=' .env 2>/dev/null | tail -1 | cut -d= -f2- \
+    | tr -d "\"'" | tr ', ' '\n\n' | grep -qx tunnel
+}
+
+# Whether cloudflared holds a live connection to Cloudflare, asked of cloudflared
+# itself (its metrics server is on loopback inside cx-tunnel; see docker-compose.yml).
+tunnel_connected() {
+  docker compose exec -T tunnel cloudflared tunnel --metrics 127.0.0.1:20241 ready \
+    >/dev/null 2>&1
 }
 
 # The tunnel's ID, which is what the DNS records must point at, read out of the
@@ -136,8 +144,14 @@ sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)" "$HOST" >/dev/null 
     if [ $(( $(date +%s) - t0 )) -ge "$timeout" ]; then
       rm -f "$hdrs"
       echo
-      if [ "$verdict" -eq 2 ]; then
-        echo "… PENDING — the stack and the tunnel are up here, but $last."
+      if [ "$verdict" -eq 2 ] && tunnel_connected; then
+        echo "… PENDING — the stack is up here and the tunnel is connected to Cloudflare,"
+        echo "  but $last."
+      elif [ "$verdict" -eq 2 ]; then
+        echo "… PENDING — the stack is up here, but $last;"
+        echo "  and the tunnel has not connected to Cloudflare. Its log:"
+        docker compose logs --tail 15 tunnel 2>/dev/null || true
+        echo "  A rejected token there means CLOUDFLARE_TUNNEL_TOKEN in .env is wrong."
       else
         echo "✗ $HOST does not reach this machine: $last." >&2
         echo "  The tunnel's own account of it:" >&2
@@ -156,12 +170,17 @@ sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)" "$HOST" >/dev/null 
   echo "  the same path a visitor's takes."
 
   # 3. Sign-in cookies are HTTPS-only. If http:// is served rather than redirected,
-  #    anyone who types it gets a login form that silently never logs them in.
+  #    anyone who types it gets a login form that silently never logs them in — so
+  #    this is unfinished setup, not a footnote.
+  local pending=0
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://$HOST/healthz" 2>/dev/null || true)"
   case "$code" in
     301|302|307|308) say "http:// redirects to https:// (Always Use HTTPS is on)" ;;
-    *) echo "  ! http://$HOST answers $code instead of redirecting to https://, and sign-in"
-       echo "    needs HTTPS. Cloudflare → SSL/TLS → Edge Certificates → Always Use HTTPS: On." ;;
+    *) echo
+       echo "… PENDING — http://$HOST answers $code instead of redirecting to https://,"
+       echo "  and signing in needs HTTPS. In Cloudflare → $BASE_DOMAIN → SSL/TLS → Edge"
+       echo "  Certificates, turn on Always Use HTTPS."
+       pending=1 ;;
   esac
 
   # 4. The projects people deploy live at <slug>.<domain>: the * record and route.
@@ -172,11 +191,12 @@ sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)" "$HOST" >/dev/null 
   case "$body" in
     *'"ok"'*) say "projects: *.$BASE_DOMAIN reaches this machine too" ;;
     *) echo
-       echo "… PENDING — sign-up and login work, but *.$BASE_DOMAIN does not reach this"
+       echo "… PENDING — app.$BASE_DOMAIN works, but *.$BASE_DOMAIN does not reach this"
        echo "  machine ($probe: ${body:0:120}), so the projects people deploy will not load."
        tunnel_dns_help
-       return 2 ;;
+       pending=1 ;;
   esac
+  [ "$pending" -eq 0 ] || return 2
   return 0
 }
 

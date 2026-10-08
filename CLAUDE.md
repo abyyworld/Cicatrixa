@@ -40,6 +40,7 @@ Nothing in this repo can change a DNS record — there is no Cloudflare API call
   app            CNAME → cname.vercel-dns.com  (Vercel) ✗   A → <platform box>, DNS only
                                                               or tunnel: CNAME → <id>.cfargotunnel.com, proxied
   *              A     → 169.58.36.128  (dead box)      ✗   A → <platform box>, DNS only
+                                                              or tunnel: CNAME → <id>.cfargotunnel.com, proxied
 ```
 
 The apex and `www` belong to Vercel and must stay there. `app` and `*` need a Linux box running
@@ -54,7 +55,8 @@ and replaced by proxied CNAMEs to the tunnel (`app` is made by the tunnel's rout
 The control plane drives a local Docker daemon through `/var/run/docker.sock` (engine, dbprovision,
 medic, metrics, watchdog, main) to build and run customer containers, keeps SQLite in WAL mode on
 a persistent volume, runs always-on loops, and routes wildcard `*.cicatrixa.com` through Traefik.
-So it needs **a Linux host with root and Docker**. Researched and fact-checked 2026-09-30:
+So it needs **a host with Docker** — a Linux box with root, or in tunnel mode any machine running
+Docker (Docker Desktop on Mac/Windows included). Researched and fact-checked 2026-09-30:
 
 - **Firebase / Cloud Run / Functions / App Hosting: cannot run it, at any price.** No Docker daemon
   (gVisor sandbox, no privileged mode), no lock-safe disk for SQLite (GCS FUSE has no locking; NFS
@@ -82,7 +84,8 @@ So it needs **a Linux host with root and Docker**. Researched and fact-checked 2
 `docs/RUNBOOK.md` has the exact steps for a new box of either kind.
 
 On the box, in `/root/cicatrixa-platform` (the repo's `platform/` directory):
-- **cx-traefik** (v3.6) — :80 and :443 public; :8080 dashboard and :9000 healer UI bound to
+- **cx-traefik** (v3.6) — :80 and :443 public (in tunnel mode every port is on loopback, and
+  cx-tunnel reaches :80 over `cxnet`); :8080 dashboard and :9000 healer UI bound to
   127.0.0.1 only (reach them over an SSH tunnel — Docker-published ports bypass the host firewall).
   Docker provider on `cxnet`, file provider on `DEMO_DYNAMIC_DIR`. Let's Encrypt HTTP-01 via resolver `le`.
 - **cx-control** — FastAPI on :8090, SQLite at `/data/cicatrixa.db` (volume `cx-data`).
@@ -133,13 +136,30 @@ freezes every request in the process.
 
 - Never point `cicatrixa.com` (apex) at the VPS again — it belongs to Vercel.
 - Never publish host ports on user containers; route by Traefik label.
-- Tunnel mode (`COMPOSE_PROFILES=tunnel` in `.env`) sets `HTTPS_REDIRECT_MW=cx-plain`: Traefik sees
-  plain HTTP from the tunnel even for HTTPS visitors, so its own redirect would loop. Cloudflare's
-  **Always Use HTTPS** does the redirect instead, and sign-in depends on it (cookies are Secure).
+- Tunnel mode (`COMPOSE_PROFILES=tunnel` in `.env`) sets `HTTPS_REDIRECT_MW=cx-tunnel`: Traefik sees
+  plain HTTP from the tunnel even for HTTPS visitors, so its own redirect would loop, and its :80
+  entrypoint overwrites X-Forwarded-Proto with `http` — `cx-tunnel` puts back `https` (else apps
+  that force HTTPS loop forever) and sends `Cloudflare-CDN-Cache-Control: no-store` (nothing can
+  purge Cloudflare's cache after a redeploy). No compress there: it holds response headers, and
+  Cloudflare cuts a response with none after ~100 s. Cloudflare's **Always Use HTTPS** does the
+  redirect, and sign-in depends on it (cookies are Secure). Anything that may outlast ~100 s in a
+  request goes in a background task; SSE streams send a comment at once and every 20 s.
+- `providers.docker.allowEmptyServices: true` in traefik.yml keeps cx-control's middlewares while
+  its healthcheck says starting/unhealthy. Without it every restart of cx-control dropped
+  `cx-app-web`, and every app's :80 router failed until it was healthy again.
   `verify-public.sh` checks the visitor's path in this mode — out through public DNS to Cloudflare
   and back through the tunnel — instead of waiting for a Let's Encrypt certificate.
-- With `ADMIN_EMAILS` set, only those addresses become admins at signup. Without it, the first
-  account on a fresh instance does — on a public instance, whoever signs up first.
+- Admin is never granted for typing an address. An `ADMIN_EMAILS` address becomes admin when its
+  emailed code is entered; otherwise `docker exec cx-control python -m app.promote <email>`, which
+  needs a shell on the server. Without `ADMIN_EMAILS`, the first account on a fresh instance is the
+  admin — on a public instance, whoever signs up first; `tunnel.sh` refuses to run without it.
+  Codes die after 5 wrong guesses, and a code email goes out at most once a minute per account.
+- Sessions, like reset links, carry a tag of the password hash (`auth.make_session`), so a new
+  password ends every older session. Every token signed with the key has its own prefix
+  (`session:`, `pending:`, `reset:`, `gh:`) — none may be accepted as another.
+- A GitHub installation is bound to an account only with proof: the App asks for authorization on
+  install (`request_oauth_on_install`), and `connect_setup` checks the installation id against the
+  installer's own `/user/installations`. One already bound to another account is always refused.
 - Password reset links are signed tokens bound to the current password hash (`auth.make_reset`):
   setting a new password kills every link issued for the old one, so no table tracks them. With
   email off or failing, `/admin` → "reset pw" makes a link to hand over manually, and `/admin`

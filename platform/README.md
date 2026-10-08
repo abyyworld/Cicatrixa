@@ -17,7 +17,7 @@ Five ways in, and two of them need no server:
 
 ```bash
 ./local.sh                                   # this machine, no domain, no certificates
-BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN=eyJ... ./tunnel.sh
+BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN=eyJ... ADMIN_EMAILS=you@example.com ./tunnel.sh
                                              # this machine, ON the internet, free — no public IP
 first-boot.sh                                # a new box: paste its stub into cloud-init at creation
 BASE_DOMAIN=cicatrixa.com ./bootstrap.sh     # a fresh box, run on the box itself
@@ -79,7 +79,7 @@ To restore the app subdomain after an outage:
 
 ```bash
 SERVER=root@<ip> ./deploy.sh          # brings up cx-traefik + cx-control, verifies :80
-dig +short app.cicatrixa.com          # must be the server's A record, not Vercel's
+dig +short app.cicatrixa.com          # the server's A record (or, tunnel mode, Cloudflare's addresses) — not Vercel's
 curl -sI https://app.cicatrixa.com/login   # 200 from cx-control, not the static site
 ```
 

@@ -1,0 +1,3 @@
+# Shell scripts run in Linux or WSL even when checked out on Windows: a CRLF
+# line ending makes bash read "set -euo pipefail\r" and stop.
+*.sh text eol=lf

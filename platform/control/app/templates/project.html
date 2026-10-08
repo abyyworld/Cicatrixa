@@ -308,6 +308,11 @@ function updateBadge() {
 const log = document.getElementById('log');
 log.scrollTop = log.scrollHeight;
 const es = new EventSource('/projects/{{ project.id }}/events');
+// EventSource retries a dropped connection on its own, but gives up for good on an
+// error status (a proxy's 502/524). Reload then, so logs and replies keep coming.
+es.onerror = () => {
+  if (es.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 5000);
+};
 es.addEventListener('log', e => {
   const d = JSON.parse(e.data);
   log.textContent += (log.textContent ? '\n' : '') + d.line;

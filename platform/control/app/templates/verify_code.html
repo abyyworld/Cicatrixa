@@ -14,6 +14,9 @@
     It expires in 10 minutes.</p>
   {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if wait %}<div class="card" style="margin-bottom:14px;padding:10px 16px">
+    <span class="mono muted" style="font-size:13px">A code went out less than a minute ago and
+    still works — give it a moment, then check spam.</span></div>{% endif %}
   {% if resent %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:10px 16px">
     <span class="mono" style="color:var(--healed);font-size:13px">✔ new code sent.</span></div>{% endif %}
   <form method="post" action="/verify-code" class="card">

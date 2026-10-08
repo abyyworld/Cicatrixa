@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlencode
 
 import docker.errors
@@ -29,12 +30,21 @@ templates.env.globals["fmt_bytes"] = metrics.fmt_bytes
 templates.env.globals["ram_per_container"] = metrics.RAM_PER_CONTAINER_MB
 templates.env.globals["now"] = db.now
 
+# Password hashing and email get pools of their own. The default executor also runs
+# deploys and builds, which hold a thread for minutes; a login must never queue
+# behind them, and a hung mail server must never hold up a login.
+_AUTH_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cx-auth")
+_MAIL_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="cx-mail")
+
+
+async def _in(pool: ThreadPoolExecutor, fn, *args):
+    return await asyncio.get_running_loop().run_in_executor(pool, fn, *args)
+
 
 # ---------- helpers ----------
 
 def current_user(request: Request):
-    uid = auth.session_user_id(request.cookies.get(auth.COOKIE_NAME))
-    return db.one("SELECT * FROM users WHERE id=?", (uid,)) if uid else None
+    return auth.session_user(request.cookies.get(auth.COOKIE_NAME))
 
 
 def render(request: Request, template: str, **ctx) -> HTMLResponse:
@@ -50,7 +60,16 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
 
 
 def need_login(request: Request):
-    return RedirectResponse("/login?next=" + request.url.path, status_code=303)
+    """Off to log in — unless they already are, and are just not allowed here (a
+    non-admin on /admin): login would send them straight back, forever."""
+    if current_user(request):
+        return RedirectResponse("/dashboard", status_code=303)
+    # Only a page can be come back to. The browser follows the post-login
+    # redirect with a GET, and a form's POST-only URL answers that with a 405.
+    if request.method == "GET":
+        return RedirectResponse("/login?" + urlencode({"next": request.url.path}),
+                                status_code=303)
+    return RedirectResponse("/login", status_code=303)
 
 
 def _safe_next(path: str) -> str:
@@ -155,13 +174,14 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
         return fail("Password must be at least 8 characters.")
     if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
         return fail("An account with that email already exists.")
-    # With ADMIN_EMAILS set, only those addresses are admins. Without it the first
-    # account on a fresh instance is — which on a public instance means whoever
-    # signs up first, so set ADMIN_EMAILS before the site is reachable.
-    is_admin = email in ADMIN_EMAILS or (not ADMIN_EMAILS and invites.bootstrap_open())
+    # Without ADMIN_EMAILS, the first account on a fresh instance is the admin. An
+    # address in ADMIN_EMAILS is NOT made admin here: anyone can type it, and with
+    # email off nothing checks they own it. It becomes admin once its emailed code
+    # proves that (verify_code_submit), or by `python -m app.promote` on the server.
+    is_admin = not ADMIN_EMAILS and invites.bootstrap_open()
     referrer = referrals.referrer_for(ref_code) if ref_code else None
     # scrypt is deliberately slow; on the event loop it would stall every request.
-    pw_hash = await asyncio.to_thread(auth.hash_password, password)
+    pw_hash = await _in(_AUTH_POOL, auth.hash_password, password)
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,referred_by,created_at) "
                "VALUES(?,?,?,?,?)",
                (email, pw_hash, 1 if is_admin else 0,
@@ -183,16 +203,36 @@ async def request_access_submit(request: Request, email: str = Form(...)):
     return render(request, "request_access.html", error=None, sent=True, message=message)
 
 
-async def _issue_code(user_id: int, email: str) -> bool:
-    """Generate + store + email a fresh code. Returns whether the email went out.
+# A code email goes out at most once a minute per account: signing up with
+# somebody else's address and then pressing Resend, or logging in over and over,
+# would otherwise flood their inbox and spend the Resend quota everyone shares.
+CODE_COOLDOWN = 60
+# Wrong guesses allowed per code. The code then dies and a new one has to be
+# sent, which the cooldown paces: 5 guesses a minute against a million codes.
+CODE_ATTEMPTS = 5
+_code_sent_at: dict[int, float] = {}
+_code_failures: dict[int, int] = {}
+
+
+async def _issue_code(user_id: int, email: str) -> str:
+    """Email a fresh code: "sent", "failed", or "cooldown" when one went out under a
+    minute ago and is still good.
 
     Awaited, not fired and forgotten: a send that failed used to leave the person
     on a page saying "we sent a code" that was never coming, with no way to learn
     otherwise. Now the page says so, and /admin shows Resend's reason."""
+    row = db.one("SELECT verify_code, verify_expires FROM users WHERE id=?", (user_id,))
+    if (row and row["verify_code"] and (row["verify_expires"] or 0) > db.now()
+            and time.time() - _code_sent_at.get(user_id, 0) < CODE_COOLDOWN):
+        return "cooldown"
     code = auth.generate_code()
     db.q("UPDATE users SET verify_code=?, verify_expires=? WHERE id=?",
          (code, db.now() + auth.CODE_TTL, user_id))
-    return await asyncio.to_thread(mailer.send_verification_code, email, code)
+    _code_failures.pop(user_id, None)
+    if not await _in(_MAIL_POOL, mailer.send_verification_code, email, code):
+        return "failed"
+    _code_sent_at[user_id] = time.time()
+    return "sent"
 
 
 def _pending(resp: RedirectResponse, user_id: int) -> RedirectResponse:
@@ -209,8 +249,9 @@ async def _start_verification(user_id: int, email: str,
     if not mailer.available():
         db.q("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
         return _signed_in(user_id, then)
-    sent = await _issue_code(user_id, email)
-    return _pending(RedirectResponse("/verify-code" + ("" if sent else "?unsent=1"),
+    outcome = await _issue_code(user_id, email)
+    return _pending(RedirectResponse("/verify-code" + ("?unsent=1" if outcome == "failed"
+                                                       else ""),
                                      status_code=303), user_id)
 
 
@@ -228,7 +269,8 @@ async def verify_code_page(request: Request):
         return RedirectResponse("/dashboard", status_code=303)
     qp = request.query_params
     return render(request, "verify_code.html", user=None, pending_email=user["email"],
-                  error=qp.get("error"), resent=qp.get("resent"), unsent=qp.get("unsent"))
+                  error=qp.get("error"), resent=qp.get("resent"), unsent=qp.get("unsent"),
+                  wait=qp.get("wait"))
 
 
 @app.post("/verify-code")
@@ -241,10 +283,23 @@ async def verify_code_submit(request: Request, code: str = Form(...)):
         and db.now() < user["verify_expires"]
         and hmac.compare_digest(code.strip(), user["verify_code"]))
     if not valid:
+        error = "That code is incorrect or has expired."
+        if user["verify_code"]:
+            failures = _code_failures.get(user["id"], 0) + 1
+            _code_failures[user["id"]] = failures
+            if failures >= CODE_ATTEMPTS:
+                db.q("UPDATE users SET verify_code=NULL, verify_expires=NULL WHERE id=?",
+                     (user["id"],))
+                _code_failures.pop(user["id"], None)
+                _code_sent_at.pop(user["id"], None)
+                error = "Too many wrong codes. Press Resend code for a new one."
         return render(request, "verify_code.html", user=None, pending_email=user["email"],
-                      error="That code is incorrect or has expired.")
-    db.q("UPDATE users SET email_verified=1, verify_code=NULL, verify_expires=NULL "
-         "WHERE id=?", (user["id"],))
+                      error=error)
+    _code_failures.pop(user["id"], None)
+    # The code proves the address is theirs — the one proof ADMIN_EMAILS can rely on.
+    admin = 1 if user["is_admin"] or user["email"] in ADMIN_EMAILS else 0
+    db.q("UPDATE users SET email_verified=1, verify_code=NULL, verify_expires=NULL, "
+         "is_admin=? WHERE id=?", (admin, user["id"]))
     resp = _signed_in(user["id"], "/dashboard?verified=1")
     resp.delete_cookie(auth.PENDING_COOKIE_NAME)
     return resp
@@ -255,9 +310,9 @@ async def verify_code_resend(request: Request):
     user = _pending_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    sent = await _issue_code(user["id"], user["email"])
-    return _pending(RedirectResponse("/verify-code?" + ("resent=1" if sent else "unsent=1"),
-                                     status_code=303), user["id"])
+    outcome = await _issue_code(user["id"], user["email"])
+    flag = {"sent": "resent=1", "failed": "unsent=1", "cooldown": "wait=1"}[outcome]
+    return _pending(RedirectResponse("/verify-code?" + flag, status_code=303), user["id"])
 
 
 @app.post("/verify-code/cancel")
@@ -278,8 +333,8 @@ async def login_page(request: Request, next: str = ""):
 async def login(request: Request, email: str = Form(...), password: str = Form(...),
                 next: str = Form("")):
     user = db.one("SELECT * FROM users WHERE email=?", (email.strip().lower(),))
-    if not user or not await asyncio.to_thread(auth.verify_password, password,
-                                               user["pw_hash"]):
+    if not user or not await _in(_AUTH_POOL, auth.verify_password, password,
+                                 user["pw_hash"]):
         return render(request, "login.html", error="Wrong email or password.", next=next)
     if not user["email_verified"]:
         return await _start_verification(user["id"], user["email"], _safe_next(next))
@@ -313,7 +368,7 @@ async def forgot_password(request: Request, email: str = Form(...)):
     user = db.one("SELECT * FROM users WHERE email=?", (email,))
     if user and time.time() - _reset_sent_at.get(user["id"], 0) >= RESET_COOLDOWN:
         _reset_sent_at[user["id"]] = time.time()
-        await asyncio.to_thread(mailer.send_password_reset, user["email"], _reset_url(user))
+        await _in(_MAIL_POOL, mailer.send_password_reset, user["email"], _reset_url(user))
     # The same answer whether or not the account exists.
     return render(request, "forgot_password.html", sent=True, email=email, mail_on=True)
 
@@ -336,8 +391,9 @@ async def reset_password(request: Request, token: str = Form(...),
         return render(request, "reset_password.html", user=None, token=token,
                       email=user["email"], invalid=False,
                       error="Password must be at least 8 characters.")
-    pw_hash = await asyncio.to_thread(auth.hash_password, password)
+    pw_hash = await _in(_AUTH_POOL, auth.hash_password, password)
     # The link reached them, so the address is theirs: no code needed after this.
+    # The new hash also ends every session from before it (auth.make_session).
     db.q("UPDATE users SET pw_hash=?, email_verified=1, verify_code=NULL, "
          "verify_expires=NULL WHERE id=?", (pw_hash, user["id"]))
     resp = _signed_in(user["id"], "/dashboard?password_reset=1")
@@ -494,13 +550,28 @@ async def chat_apply(request: Request, project_id: int, message_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
-    service_id, text = await asyncio.to_thread(medic.apply_fix_sync,
-                                               project_id, message_id)
-    if service_id:
-        asyncio.create_task(engine.deploy(service_id, "chat-fix"))
-    else:
-        medic.add_message(project_id, "agent", f"✖ {text}", kind="status")
+    # In the background: cloning, building and testing can outlast the ~100 s a
+    # request may take behind Cloudflare (tunnel mode), which would show a 524 page
+    # while the work went on. Progress reaches the chat over the event stream.
+    if message_id not in _applying:
+        _applying.add(message_id)
+        asyncio.create_task(_apply_fix(project_id, message_id))
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+_applying: set[int] = set()   # one Apply at a time per proposal: a second click waits
+
+
+async def _apply_fix(project_id: int, message_id: int):
+    try:
+        service_id, text = await asyncio.to_thread(medic.apply_fix_sync,
+                                                   project_id, message_id)
+        if service_id:
+            await engine.deploy(service_id, "chat-fix")
+        else:
+            medic.add_message(project_id, "agent", f"✖ {text}", kind="status")
+    finally:
+        _applying.discard(message_id)
 
 
 @app.post("/projects/{project_id}/deploy")
@@ -582,7 +653,10 @@ async def add_database(request: Request, project_id: int, name: str = Form("prim
         return RedirectResponse(f"/projects/{project_id}?error="
                                 + quota_err.replace(" ", "+"), status_code=303)
     name = re.sub(r"[^a-zA-Z0-9_-]+", "", name.strip()) or "primary"
-    await asyncio.to_thread(dbprovision.create, project, name)
+    # In the background, like deploys: the first one pulls postgres, which on a
+    # slow line outlasts what a request may take behind Cloudflare. Progress goes
+    # to the project's log stream.
+    asyncio.create_task(asyncio.to_thread(dbprovision.create, project, name))
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
@@ -662,7 +736,8 @@ async def connect_github(request: Request):
     user = current_user(request)
     if not user:
         return need_login(request)
-    return render(request, "connect.html", user=user, error=None)
+    return render(request, "connect.html", user=user,
+                  error=request.query_params.get("error"))
 
 
 @app.get("/connect/github/start")
@@ -680,7 +755,7 @@ async def connect_start(request: Request):
         # has no proceed button when the app is already installed.
         return RedirectResponse(
             f"https://github.com/settings/installations/{existing['installation_id']}")
-    state = auth.sign_state(str(user["id"]))
+    state = auth.make_gh_state(user["id"])
     return RedirectResponse(
         f"https://github.com/apps/{gh.app_slug()}/installations/new?state={state}")
 
@@ -688,24 +763,47 @@ async def connect_start(request: Request):
 @app.get("/connect/github/setup")
 @app.get("/connect/github/callback")
 async def connect_setup(request: Request):
-    """GitHub sends the user back here after installing the App."""
+    """GitHub sends the user back here after installing the App.
+
+    The installation_id in the URL proves nothing: anyone can type one, the ids are
+    sequential, and binding someone else's would hand over their private repos.
+    So an installation already connected to another account is refused, and a new
+    one needs proof from GitHub that the person here can see it — the OAuth code
+    GitHub adds when the App asks for authorization on install (build_manifest)."""
     params = request.query_params
-    installation_id = params.get("installation_id")
-    uid = auth.verify_state(params.get("state", ""))
+    uid = auth.gh_state_user_id(params.get("state"))
     user = current_user(request)
     if uid is None and user:
-        uid = str(user["id"])
-    if not installation_id or uid is None:
-        return RedirectResponse("/connect/github", status_code=303)
-    login = ""
+        uid = user["id"]
     try:
-        token = gh.installation_token(int(installation_id))
-        login = ""  # installation tokens can't call /user; store empty
-    except Exception:
-        pass
-    db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (int(uid),))
+        installation_id = int(params.get("installation_id", ""))
+    except ValueError:
+        installation_id = None
+    if installation_id is None or uid is None:
+        return RedirectResponse("/connect/github", status_code=303)
+
+    def refuse(why: str):
+        return RedirectResponse("/connect/github?" + urlencode({"error": why}),
+                                status_code=303)
+
+    if db.one("SELECT 1 FROM github_connections WHERE kind='app' AND installation_id=? "
+              "AND user_id<>?", (installation_id, uid)):
+        return refuse("That GitHub installation is already connected to another account.")
+    ours = db.one("SELECT 1 FROM github_connections WHERE kind='app' AND installation_id=? "
+                  "AND user_id=?", (installation_id, uid))
+    if not ours:
+        code = params.get("code")
+        if code:
+            visible = await asyncio.to_thread(gh.user_installation_ids, code)
+            if visible is None or installation_id not in visible:
+                return refuse("GitHub did not confirm that installation is yours. "
+                              "Connect again from this page.")
+        elif gh.oauth_on_install():
+            return refuse("GitHub sent no authorization with that installation. "
+                          "Connect again from this page.")
+    db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (uid,))
     db.q("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,created_at)"
-         " VALUES(?,?,?,?,?)", (int(uid), "app", int(installation_id), login, db.now()))
+         " VALUES(?,?,?,?,?)", (uid, "app", installation_id, "", db.now()))
     return RedirectResponse("/projects/new", status_code=303)
 
 
