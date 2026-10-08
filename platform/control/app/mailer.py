@@ -6,12 +6,18 @@ import httpx
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 FROM_ADDR = os.environ.get("MAIL_FROM", "Cicatrixa <noreply@cicatrixa.com>")
 
+# Why the most recent send failed, cleared by the next one that succeeds. Shown on
+# /admin: a key that works but a sending domain Resend has not verified fails every
+# message to anyone but the account owner, and nothing else on the platform says so.
+last_error = ""
+
 
 def available() -> bool:
     return bool(RESEND_API_KEY)
 
 
 def send(to: str, subject: str, text: str, html: str | None = None) -> bool:
+    global last_error
     if not available():
         return False
     payload = {"from": FROM_ADDR, "to": [to], "subject": subject, "text": text}
@@ -21,9 +27,16 @@ def send(to: str, subject: str, text: str, html: str | None = None) -> bool:
         r = httpx.post("https://api.resend.com/emails",
                        headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
                        json=payload, timeout=15)
-        return r.status_code < 300
-    except Exception:
-        return False
+    except Exception as e:
+        last_error = f"{type(e).__name__}: {e}"
+    else:
+        if r.status_code < 300:
+            last_error = ""
+            return True
+        last_error = f"Resend answered {r.status_code}: {r.text[:300]}"
+    # Not the subject: a verification code is in it.
+    print(f"mailer: send failed: {last_error}", flush=True)
+    return False
 
 
 def _wrap(eyebrow: str, body_html: str) -> str:
@@ -56,6 +69,22 @@ margin:0 0 22px;text-align:center">{code}</div>
 email — nothing happens without the code.</p>""")
     return send(to, f"{code} is your Cicatrixa verification code",
                f"Your Cicatrixa verification code is {code}. It expires in 10 minutes.", html)
+
+
+def send_password_reset(to: str, reset_url: str) -> bool:
+    html = _wrap("reset your password", f"""
+<p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">
+Someone asked to reset the password for this Cicatrixa account. The link below works
+once and expires in an hour.</p>
+<a href="{reset_url}" style="display:inline-block;background:#40D967;color:#06130A;
+text-decoration:none;padding:11px 22px;border-radius:8px;font-size:12.5px;font-weight:600;
+letter-spacing:.04em">Choose a new password →</a>
+<p style="font-size:12px;color:#74857B;margin-top:20px">Or paste this link:<br>{reset_url}</p>
+<p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Didn't ask for this? Ignore this
+email — your password stays as it is.</p>""")
+    return send(to, "Reset your Cicatrixa password",
+               f"Choose a new Cicatrixa password (link works once, for an hour): {reset_url}",
+               html)
 
 
 def send_invite(to: str, signup_url: str) -> bool:

@@ -4,8 +4,15 @@
 <div style="max-width:400px;margin:60px auto">
   <div class="lbl-caps">check your inbox</div>
   <h1>Enter your <em>code</em></h1>
+  {% if unsent %}
+  <p class="sub">A 6-digit code goes to <b style="color:var(--ink)">{{ pending_email }}</b>.</p>
+  <div class="err">We couldn't send the email just now. Check the address is right, then
+    press <b>Resend code</b>. Still nothing? Write to
+    <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>.</div>
+  {% else %}
   <p class="sub">We sent a 6-digit code to <b style="color:var(--ink)">{{ pending_email }}</b>.
     It expires in 10 minutes.</p>
+  {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   {% if resent %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:10px 16px">
     <span class="mono" style="color:var(--healed);font-size:13px">✔ new code sent.</span></div>{% endif %}

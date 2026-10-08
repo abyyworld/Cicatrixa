@@ -4,6 +4,8 @@ import hmac
 import json
 import os
 import re
+import time
+from urllib.parse import urlencode
 
 import docker.errors
 from fastapi import FastAPI, Form, Request
@@ -49,6 +51,21 @@ def render(request: Request, template: str, **ctx) -> HTMLResponse:
 
 def need_login(request: Request):
     return RedirectResponse("/login?next=" + request.url.path, status_code=303)
+
+
+def _safe_next(path: str) -> str:
+    """Where to land after logging in: a path on this site, never another host.
+    "//evil.com" and "/\\evil.com" are host-relative URLs to a browser."""
+    if path.startswith("/") and not path.startswith(("//", "/\\")):
+        return path
+    return "/dashboard"
+
+
+def _signed_in(user_id: int, to: str = "/dashboard") -> RedirectResponse:
+    resp = RedirectResponse(to, status_code=303)
+    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user_id), max_age=auth.SESSION_TTL,
+                    httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
+    return resp
 
 
 def make_slug(name: str) -> str:
@@ -138,13 +155,18 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
         return fail("Password must be at least 8 characters.")
     if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
         return fail("An account with that email already exists.")
-    is_admin = email in ADMIN_EMAILS or invites.bootstrap_open()
+    # With ADMIN_EMAILS set, only those addresses are admins. Without it the first
+    # account on a fresh instance is — which on a public instance means whoever
+    # signs up first, so set ADMIN_EMAILS before the site is reachable.
+    is_admin = email in ADMIN_EMAILS or (not ADMIN_EMAILS and invites.bootstrap_open())
     referrer = referrals.referrer_for(ref_code) if ref_code else None
+    # scrypt is deliberately slow; on the event loop it would stall every request.
+    pw_hash = await asyncio.to_thread(auth.hash_password, password)
     uid = db.q("INSERT INTO users(email,pw_hash,is_admin,referred_by,created_at) "
                "VALUES(?,?,?,?,?)",
-               (email, auth.hash_password(password), 1 if is_admin else 0,
+               (email, pw_hash, 1 if is_admin else 0,
                 referrer["id"] if referrer else None, db.now())).lastrowid
-    return _start_verification(uid, email)
+    return await _start_verification(uid, email)
 
 
 @app.get("/request-access", response_class=HTMLResponse)
@@ -161,31 +183,35 @@ async def request_access_submit(request: Request, email: str = Form(...)):
     return render(request, "request_access.html", error=None, sent=True, message=message)
 
 
-def _issue_code(user_id: int, email: str) -> bool:
-    """Generate + store + email a fresh code. Returns whether it could be sent."""
-    if not mailer.available():
-        return False
+async def _issue_code(user_id: int, email: str) -> bool:
+    """Generate + store + email a fresh code. Returns whether the email went out.
+
+    Awaited, not fired and forgotten: a send that failed used to leave the person
+    on a page saying "we sent a code" that was never coming, with no way to learn
+    otherwise. Now the page says so, and /admin shows Resend's reason."""
     code = auth.generate_code()
     db.q("UPDATE users SET verify_code=?, verify_expires=? WHERE id=?",
          (code, db.now() + auth.CODE_TTL, user_id))
-    asyncio.create_task(asyncio.to_thread(mailer.send_verification_code, email, code))
-    return True
+    return await asyncio.to_thread(mailer.send_verification_code, email, code)
 
 
-def _start_verification(user_id: int, email: str) -> RedirectResponse:
+def _pending(resp: RedirectResponse, user_id: int) -> RedirectResponse:
+    resp.set_cookie(auth.PENDING_COOKIE_NAME, auth.make_pending(user_id),
+                    max_age=auth.PENDING_TTL, httponly=True, samesite="lax",
+                    secure=engine.HTTPS_ENABLED)
+    return resp
+
+
+async def _start_verification(user_id: int, email: str,
+                              then: str = "/dashboard") -> RedirectResponse:
     """Send a code and gate on it — or, if mail isn't configured on this instance,
     verify immediately so local/dev setups without RESEND_API_KEY still work."""
-    if _issue_code(user_id, email):
-        resp = RedirectResponse("/verify-code", status_code=303)
-        resp.set_cookie(auth.PENDING_COOKIE_NAME, auth.make_pending(user_id),
-                        max_age=auth.PENDING_TTL, httponly=True, samesite="lax",
-                        secure=engine.HTTPS_ENABLED)
-        return resp
-    db.q("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
-    resp = RedirectResponse("/dashboard", status_code=303)
-    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user_id), max_age=auth.SESSION_TTL,
-                    httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
-    return resp
+    if not mailer.available():
+        db.q("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
+        return _signed_in(user_id, then)
+    sent = await _issue_code(user_id, email)
+    return _pending(RedirectResponse("/verify-code" + ("" if sent else "?unsent=1"),
+                                     status_code=303), user_id)
 
 
 def _pending_user(request: Request):
@@ -202,7 +228,7 @@ async def verify_code_page(request: Request):
         return RedirectResponse("/dashboard", status_code=303)
     qp = request.query_params
     return render(request, "verify_code.html", user=None, pending_email=user["email"],
-                  error=qp.get("error"), resent=qp.get("resent"))
+                  error=qp.get("error"), resent=qp.get("resent"), unsent=qp.get("unsent"))
 
 
 @app.post("/verify-code")
@@ -219,10 +245,8 @@ async def verify_code_submit(request: Request, code: str = Form(...)):
                       error="That code is incorrect or has expired.")
     db.q("UPDATE users SET email_verified=1, verify_code=NULL, verify_expires=NULL "
          "WHERE id=?", (user["id"],))
-    resp = RedirectResponse("/dashboard?verified=1", status_code=303)
+    resp = _signed_in(user["id"], "/dashboard?verified=1")
     resp.delete_cookie(auth.PENDING_COOKIE_NAME)
-    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user["id"]), max_age=auth.SESSION_TTL,
-                    httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
     return resp
 
 
@@ -231,12 +255,9 @@ async def verify_code_resend(request: Request):
     user = _pending_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    _issue_code(user["id"], user["email"])
-    resp = RedirectResponse("/verify-code?resent=1", status_code=303)
-    resp.set_cookie(auth.PENDING_COOKIE_NAME, auth.make_pending(user["id"]),
-                    max_age=auth.PENDING_TTL, httponly=True, samesite="lax",
-                    secure=engine.HTTPS_ENABLED)
-    return resp
+    sent = await _issue_code(user["id"], user["email"])
+    return _pending(RedirectResponse("/verify-code?" + ("resent=1" if sent else "unsent=1"),
+                                     status_code=303), user["id"])
 
 
 @app.post("/verify-code/cancel")
@@ -247,22 +268,80 @@ async def verify_code_cancel():
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+async def login_page(request: Request, next: str = ""):
     if current_user(request):
-        return RedirectResponse("/dashboard", status_code=303)
-    return render(request, "login.html", error=None)
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return render(request, "login.html", error=None, next=next)
 
 
 @app.post("/login")
-async def login(request: Request, email: str = Form(...), password: str = Form(...)):
+async def login(request: Request, email: str = Form(...), password: str = Form(...),
+                next: str = Form("")):
     user = db.one("SELECT * FROM users WHERE email=?", (email.strip().lower(),))
-    if not user or not auth.verify_password(password, user["pw_hash"]):
-        return render(request, "login.html", error="Wrong email or password.")
+    if not user or not await asyncio.to_thread(auth.verify_password, password,
+                                               user["pw_hash"]):
+        return render(request, "login.html", error="Wrong email or password.", next=next)
     if not user["email_verified"]:
-        return _start_verification(user["id"], user["email"])
-    resp = RedirectResponse("/dashboard", status_code=303)
-    resp.set_cookie(auth.COOKIE_NAME, auth.make_session(user["id"]),
-                    max_age=auth.SESSION_TTL, httponly=True, samesite="lax", secure=engine.HTTPS_ENABLED)
+        return await _start_verification(user["id"], user["email"], _safe_next(next))
+    return _signed_in(user["id"], _safe_next(next))
+
+
+# ---------- forgotten passwords ----------
+
+# One reset email per account per minute, so the form cannot be used to flood
+# somebody's inbox. In memory: the control plane is a single process.
+RESET_COOLDOWN = 60
+_reset_sent_at: dict[int, float] = {}
+
+
+def _reset_url(user) -> str:
+    return f"{BASE_URL}/reset-password?" + urlencode({"token": auth.make_reset(user)})
+
+
+@app.get("/forgot-password", response_class=HTMLResponse)
+async def forgot_password_page(request: Request):
+    return render(request, "forgot_password.html", sent=False, email="",
+                  mail_on=mailer.available())
+
+
+@app.post("/forgot-password", response_class=HTMLResponse)
+async def forgot_password(request: Request, email: str = Form(...)):
+    email = email.strip().lower()
+    if not mailer.available():
+        return render(request, "forgot_password.html", sent=False, email=email,
+                      mail_on=False)
+    user = db.one("SELECT * FROM users WHERE email=?", (email,))
+    if user and time.time() - _reset_sent_at.get(user["id"], 0) >= RESET_COOLDOWN:
+        _reset_sent_at[user["id"]] = time.time()
+        await asyncio.to_thread(mailer.send_password_reset, user["email"], _reset_url(user))
+    # The same answer whether or not the account exists.
+    return render(request, "forgot_password.html", sent=True, email=email, mail_on=True)
+
+
+@app.get("/reset-password", response_class=HTMLResponse)
+async def reset_password_page(request: Request, token: str = ""):
+    user = auth.reset_user(token)
+    return render(request, "reset_password.html", user=None, token=token,
+                  email=user["email"] if user else "", invalid=not user, error=None)
+
+
+@app.post("/reset-password", response_class=HTMLResponse)
+async def reset_password(request: Request, token: str = Form(...),
+                         password: str = Form(...)):
+    user = auth.reset_user(token)
+    if not user:
+        return render(request, "reset_password.html", user=None, token="", email="",
+                      invalid=True, error=None)
+    if len(password) < 8:
+        return render(request, "reset_password.html", user=None, token=token,
+                      email=user["email"], invalid=False,
+                      error="Password must be at least 8 characters.")
+    pw_hash = await asyncio.to_thread(auth.hash_password, password)
+    # The link reached them, so the address is theirs: no code needed after this.
+    db.q("UPDATE users SET pw_hash=?, email_verified=1, verify_code=NULL, "
+         "verify_expires=NULL WHERE id=?", (pw_hash, user["id"]))
+    resp = _signed_in(user["id"], "/dashboard?password_reset=1")
+    resp.delete_cookie(auth.PENDING_COOKIE_NAME)
     return resp
 
 
@@ -298,7 +377,8 @@ async def dashboard(request: Request):
                   is_paid=referrals.is_paid(user),
                   trial_days_left=referrals.trial_days_left(user),
                   billing_on=billing.available(), just_paid=qp.get("paid"),
-                  error=qp.get("error"), verified=qp.get("verified"))
+                  error=qp.get("error"), verified=qp.get("verified"),
+                  password_reset=qp.get("password_reset"))
 
 
 @app.get("/projects/new", response_class=HTMLResponse)
@@ -681,11 +761,7 @@ async def api_repos(request: Request):
 
 # ---------- admin: one-click GitHub App creation (manifest flow) ----------
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
-    user = current_user(request)
-    if not user or not user["is_admin"]:
-        return need_login(request)
+async def _render_admin(request: Request, user, **extra) -> HTMLResponse:
     manifest = gh.build_manifest(BASE_URL)
     await asyncio.to_thread(metrics.ensure_fresh)
     return render(request, "admin.html", user=user,
@@ -697,7 +773,30 @@ async def admin_page(request: Request):
                   growth=metrics.growth_stats(),
                   pending_requests=invites.pending_requests(),
                   sent_invites=invites.sent_invites(),
-                  error=request.query_params.get("error"))
+                  mail_on=mailer.available(), mail_error=mailer.last_error,
+                  error=request.query_params.get("error"), **extra)
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    return await _render_admin(request, user)
+
+
+@app.post("/admin/users/{user_id}/reset-link", response_class=HTMLResponse)
+async def admin_reset_link(request: Request, user_id: int):
+    """A reset link for the admin to pass on by hand — the only way back in for
+    someone who forgot their password while email is off or failing."""
+    user = current_user(request)
+    if not user or not user["is_admin"]:
+        return need_login(request)
+    target = db.one("SELECT * FROM users WHERE id=?", (user_id,))
+    if not target:
+        return RedirectResponse("/admin?error=No+such+user.", status_code=303)
+    return await _render_admin(request, user, reset_link=_reset_url(target),
+                               reset_email=target["email"])
 
 
 @app.post("/admin/users/{user_id}/quota")

@@ -14,6 +14,7 @@ COOKIE_NAME = "cx_session"
 PENDING_COOKIE_NAME = "cx_pending"
 PENDING_TTL = 15 * 60
 CODE_TTL = 10 * 60
+RESET_TTL = 60 * 60
 
 
 def generate_code() -> str:
@@ -95,6 +96,32 @@ def pending_user_id(token: str | None) -> int | None:
         return int(data.split(":", 1)[1])
     except ValueError:
         return None
+
+
+def _password_tag(pw_hash: str) -> str:
+    """Binds a reset link to the password it replaces. Setting a new password
+    changes the tag, so every link issued for the old one stops working: a link
+    is single-use without a table to track it."""
+    return hmac.new(_secret(), (pw_hash or "").encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def make_reset(user) -> str:
+    return sign_state(f"reset:{user['id']}:{_password_tag(user['pw_hash'])}", ttl=RESET_TTL)
+
+
+def reset_user(token: str | None):
+    """The user a reset link is for, or None if it is forged, expired or used."""
+    data = verify_state(token or "")
+    if not data or not data.startswith("reset:"):
+        return None
+    try:
+        _, uid, tag = data.split(":")
+        user = db.one("SELECT * FROM users WHERE id=?", (int(uid),))
+    except ValueError:
+        return None
+    if not user or not hmac.compare_digest(tag, _password_tag(user["pw_hash"])):
+        return None
+    return user
 
 
 def sign_state(data: str, ttl: int = 3600) -> str:

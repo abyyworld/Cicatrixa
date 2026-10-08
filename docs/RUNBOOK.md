@@ -72,6 +72,86 @@ The old VPS (169.58.36.128) is gone. A new one is one command plus two DNS recor
 |---|---|---|---|
 | **Smallest Hetzner x86 cloud plan** (or any comparable VPS) | ~€5–6/mo incl. IPv4 — check hetzner.com/cloud, plans and prices changed in 2026 | x86 | none — the clean answer |
 | **Oracle Cloud Always Free, A1** | $0, card on file | ARM64 | Oracle's terms bar "service bureau" use; instances were disabled and deleted in 2026. Stopgap only — back up the database off the box |
+| **Any machine you already have + Cloudflare Tunnel** (`platform/tunnel.sh`) | $0 — Cloudflare's Zero Trust sign-up may ask for a card on its Free plan, but does not charge it | whatever it is | it must stay on and awake; customer code runs on it; no public IP or open port needed |
+
+### Free: Cloudflare Tunnel, on any machine with Docker
+
+The domain's DNS is already on Cloudflare, so Cloudflare can carry the traffic too. `cx-tunnel`
+(cloudflared) dials **out** from the machine; Cloudflare sends `app.cicatrixa.com` and every
+`<project>.cicatrixa.com` back down that connection to `cx-traefik`, and serves HTTPS on the
+certificate it already holds for the domain. No public IP, no port forwarding, no firewall rule,
+no Let's Encrypt — a home PC behind a router works, and so does an Oracle box with nothing opened.
+
+What it costs you instead: **the machine is the server.** Asleep, off, or offline, the site shows
+a Cloudflare error. Customer containers run on it and can reach its local network — use a
+machine or VM that holds nothing else you care about, not your everyday laptop. On Apple Silicon
+or a Raspberry Pi, repos that assume x86 can fail with "exec format error", as on Oracle.
+
+**1. Create the tunnel** — Cloudflare dashboard → **Zero Trust** → **Networks → Tunnels** →
+*Create a tunnel* → **Cloudflared** → name it `cicatrixa`. (Menu names move; search the dashboard
+for "Tunnels" if these are gone. A first visit to Zero Trust asks you to pick a plan: **Free**.)
+The next screen shows install commands containing a long string starting with `eyJ` — that is the
+token. Copy any of those commands; `tunnel.sh` takes the token out of whatever you paste.
+
+**2. Clear the two old records** — Cloudflare → `cicatrixa.com` → **DNS**: **delete** `app`
+(CNAME → Vercel) and `*` (A → the dead `169.58.36.128`). Cloudflare will not add a record next to
+an existing one of the same name. Leave `cicatrixa.com` and `www` alone — they are Vercel's.
+
+**3. Give the tunnel its two routes** — back in the tunnel, *Public hostnames* (newer dashboards:
+*Published application routes*) → add both, service type **HTTP**, URL **`cx-traefik:80`**:
+
+| subdomain | domain | service |
+|---|---|---|
+| `app` | `cicatrixa.com` | HTTP `cx-traefik:80` |
+| `*` | `cicatrixa.com` | HTTP `cx-traefik:80` |
+
+The `app` route creates its DNS record for you. The `*` one does not (the dashboard warns about it):
+
+**4. Add the wildcard record by hand** — DNS → add **CNAME** `*` → `<tunnel-id>.cfargotunnel.com`,
+**Proxied** (orange cloud). The tunnel ID is on the tunnel's page, and `tunnel.sh` prints the exact
+target if it is missing.
+
+**5. Turn on HTTPS everywhere** — **SSL/TLS → Edge Certificates → Always Use HTTPS: On.** Sign-in
+cookies are HTTPS-only, so without it anyone who types `http://` gets a login that never logs in.
+It only affects proxied records, so the Vercel site is untouched.
+
+**6. Vercel** → the project → **Settings → Domains** → remove `app.cicatrixa.com`.
+
+**7. On the machine** (Docker installed and running — Docker Desktop on Mac/Windows; on Windows
+run this inside WSL):
+
+```bash
+git clone https://github.com/abyyworld/cicatrixa.git && cd cicatrixa/platform
+BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN='eyJ...' ADMIN_EMAILS=you@example.com ./tunnel.sh
+```
+
+`ADMIN_EMAILS` is the address you will sign up with yourself (comma-separate several).
+
+Add `OPENAI_API_KEY=sk-...` (and `RESEND_API_KEY`, Stripe keys) on the same line when you have
+them; everything is kept in `platform/.env` (mode 600, never committed). It ends with
+`verify-public.sh`, which in this mode checks the visitor's own path — out to Cloudflare through
+public DNS and back in through the tunnel — then that `http://` redirects and that a project
+subdomain arrives too:
+
+| result | meaning |
+|---|---|
+| `✓ … is live through the Cloudflare tunnel` (exit 0) | sign up at `https://app.cicatrixa.com/signup` with an address in `ADMIN_EMAILS` to be the admin. Without `ADMIN_EMAILS`, the first account on a new install is the admin, whoever makes it |
+| `… PENDING` (exit 2) | the stack and tunnel run here; a DNS record or route is missing — it prints exactly which, with the tunnel ID filled in |
+| `✗` (exit 1) | stack down, tunnel not connected (a wrong token shows in the tunnel's log it prints), or a route pointing somewhere other than `cx-traefik:80` |
+
+Updating later, or after a reboot (`restart: unless-stopped` brings it back on its own once
+Docker starts): `git pull && ./tunnel.sh`. Taking it offline: `./tunnel.sh stop`. Moving it to a
+real server later is the A-record path below; delete the tunnel's records first.
+
+Back up the database off the machine, as on any box (same command as below, minus the ssh):
+
+```bash
+f=cicatrixa-$(date +%F).db
+docker exec cx-control python -c "import sqlite3;s=sqlite3.connect(\"file:/data/cicatrixa.db?mode=ro\",uri=True);d=sqlite3.connect(\"/data/backup.db\");s.backup(d);d.close()" \
+  && docker exec cx-control cat /data/backup.db > "$f.tmp" \
+  && [ "$(head -c 15 "$f.tmp")" = "SQLite format 3" ] && mv "$f.tmp" "$f" && echo "saved $f" \
+  || { echo "backup FAILED" >&2; rm -f "$f.tmp"; }
+```
 
 ### Oracle only — the console clicks that matter
 
@@ -260,6 +340,17 @@ curl -I  http://app.cicatrixa.com/healthz      # expect 301 -> https
 curl -sI https://app.cicatrixa.com/healthz     # expect 200
 curl -s  https://cicatrixa.com | head -5       # expect the marketing HTML from Vercel
 ```
+
+## "Nobody can sign up" / "I forgot my password"
+
+Signup, login and password reset all live in the control plane, so start with whether one is
+answering at all:
+
+| symptom | cause | fix |
+|---|---|---|
+| `app.cicatrixa.com/signup` is a 404, or the marketing page | `app` still points at Vercel — no control plane anywhere | bring one up: "Free: Cloudflare Tunnel" or a box above |
+| signup works, then "enter your code" and no email ever arrives | `RESEND_API_KEY` is set but Resend refuses to send — usually the sending domain is not verified, which only lets the Resend account's owner receive mail | `/admin` shows Resend's last answer; verify the domain at resend.com/domains, or remove the key (then signups skip the code) |
+| someone forgot their password | — | "Forgot your password?" on the login page emails a one-hour, one-use link. With email off or failing: `/admin` → **reset pw** next to the user, and send them the link yourself |
 
 ## What each check proves
 

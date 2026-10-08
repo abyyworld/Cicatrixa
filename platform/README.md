@@ -13,10 +13,12 @@ signup ─▶ connect GitHub ─▶ pick repo ─▶ AI deploy pipeline ─▶ l
 
 ## Running it
 
-Four ways in, and only one of them runs without a server:
+Five ways in, and two of them need no server:
 
 ```bash
 ./local.sh                                   # this machine, no domain, no certificates
+BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN=eyJ... ./tunnel.sh
+                                             # this machine, ON the internet, free — no public IP
 first-boot.sh                                # a new box: paste its stub into cloud-init at creation
 BASE_DOMAIN=cicatrixa.com ./bootstrap.sh     # a fresh box, run on the box itself
 SERVER=root@<ip> ./deploy.sh                 # a box that already has a checkout
@@ -29,6 +31,13 @@ top into the provider's cloud-init box when you create the instance (Oracle:
 runs `bootstrap.sh`, and if DNS is not pointed yet it keeps checking in the background
 and goes live once it is. Progress is in `/var/log/cicatrixa-first-boot.log`. Never put
 API keys in cloud-init: the metadata service hands user data to every container on the box.
+
+`tunnel.sh` is the free answer to "we have no server": any machine with Docker
+serves `app.<domain>` and every project subdomain through a Cloudflare Tunnel. It
+dials out, so there is no port to open and no certificate to issue — Cloudflare
+terminates TLS for the domain it already runs DNS for. The Cloudflare clicks (create
+the tunnel, two routes to `cx-traefik:80`, one wildcard record, Always Use HTTPS) are in
+`docs/RUNBOOK.md`, "Free: Cloudflare Tunnel". The machine has to stay on: it is the server.
 
 `local.sh` is the answer to "the server is broken": the control plane, the deploy
 engine and the healer all run on your own machine, projects come up at
@@ -54,7 +63,8 @@ product does, so it needs a Docker host somewhere — your laptop counts.
   order, `app.` included.
 - **`app.cicatrixa.com`** and `*.cicatrixa.com` (the projects people deploy) are served
   by the server, through `cx-traefik`.
-- **`app.cicatrixa.com` must resolve to the server**, not to Vercel. Vercel has no
+- **`app.cicatrixa.com` must reach the server** — an A record to its IP, or a proxied
+  CNAME to its Cloudflare tunnel (`tunnel.sh`) — not Vercel. Vercel has no
   control plane, so anything it serves on that hostname is a placeholder standing in
   front of the product: signup, login, the dashboard, GitHub connect and billing all
   live in `control/`.

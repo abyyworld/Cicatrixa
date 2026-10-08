@@ -104,6 +104,24 @@ services:
       - "traefik.http.routers.cx-control-secure.service=cx-control"
       - "traefik.http.routers.cx-control-secure.tls.certresolver=le"
 
+  # The free way to put the platform on the internet: no public IP, no open port,
+  # no certificate to issue. cloudflared dials OUT to Cloudflare, which already
+  # serves this domain's DNS and terminates TLS at its edge, and hands every request
+  # for app.<domain> and *.<domain> to cx-traefik:80 — so any machine with Docker
+  # can host it, a home PC behind a router included. Off unless .env says
+  # COMPOSE_PROFILES=tunnel; tunnel.sh writes that and the token. The routes and DNS
+  # records live in the Cloudflare dashboard: docs/RUNBOOK.md, "Free: Cloudflare Tunnel".
+  tunnel:
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: cx-tunnel
+    profiles: [tunnel]
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks: [cxnet]
+    depends_on: [traefik]
+    restart: unless-stopped
+
 volumes:
   cx-data:
   cx-letsencrypt:

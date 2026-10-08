@@ -18,9 +18,9 @@ Owner: kenny09077@gmail.com. Cloudflare account: Annolieberto@gmail.com.
 | | `site/` + `vercel.json` | `platform/` |
 |---|---|---|
 | what | static marketing page (one 44KB `index.html`) | the real product: FastAPI control plane + Traefik |
-| runs on | **Vercel** (static) | **any Linux box with Docker** — none live as of 2026-09-30 |
+| runs on | **Vercel** (static) | **any machine with Docker** — none live as of 2026-10-08 |
 | serves | `cicatrixa.com`, `www.` | `app.cicatrixa.com`, `*.cicatrixa.com` user apps, `demo.` |
-| deploy | git push → Vercel | new box: paste `platform/first-boot.sh`'s stub into cloud-init; by hand: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
+| deploy | git push → Vercel | free, any machine: `platform/tunnel.sh` (Cloudflare Tunnel); new box: paste `platform/first-boot.sh`'s stub into cloud-init; by hand: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
 
 There is a **third**, older thing: the repo root (`docker-compose.yml`, `app/`, `healer/`,
 `traefik/`) is the original **self-heal demo** — a seeded-bug FastAPI order service plus the
@@ -38,13 +38,16 @@ Nothing in this repo can change a DNS record — there is no Cloudflare API call
   cicatrixa.com  CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
   www            CNAME → cname.vercel-dns.com  (Vercel) ✓   unchanged
   app            CNAME → cname.vercel-dns.com  (Vercel) ✗   A → <platform box>, DNS only
+                                                              or tunnel: CNAME → <id>.cfargotunnel.com, proxied
   *              A     → 169.58.36.128  (dead box)      ✗   A → <platform box>, DNS only
 ```
 
 The apex and `www` belong to Vercel and must stay there. `app` and `*` need a Linux box running
 Docker. Both records already exist, so they are **edited**, not added: Cloudflare will not create
 an A record beside an existing CNAME of the same name. Then remove `app.cicatrixa.com` from the
-Vercel project so nothing else claims it.
+Vercel project so nothing else claims it. In tunnel mode the two records are instead **deleted**
+and replaced by proxied CNAMEs to the tunnel (`app` is made by the tunnel's route, `*` by hand) —
+`docs/RUNBOOK.md`, "Free: Cloudflare Tunnel".
 
 ## Hosting the platform — what can and cannot run it
 
@@ -68,6 +71,11 @@ So it needs **a Linux host with root and Docker**. Researched and fact-checked 2
   with "exec format error"; `ai.py` tells the model the host architecture to reduce this.
 - **A ~€5–6/mo x86 VPS (the smallest Hetzner cloud plan, or similar): the clean answer.** No ToS
   risk, no ARM surprises. Hetzner renamed and repriced its plans in 2026 — check before quoting one.
+- **Any machine you already have + Cloudflare Tunnel (`platform/tunnel.sh`, added 2026-10-08): $0.**
+  `cx-tunnel` (cloudflared, compose profile `tunnel`) dials out to Cloudflare, which already runs the
+  domain's DNS and terminates TLS at its edge, and forwards `app.` and `*.` to `cx-traefik:80`. No
+  public IP, open port or Let's Encrypt. The catch is the machine: it must stay on, and customer
+  code runs on it and can reach its LAN. Zero Trust's Free plan may ask for a card; it is not charged.
 - GCP e2-micro (1 GB RAM), AWS (credits, time-limited), Azure (12 months) and every PaaS without a
   Docker socket were rejected.
 
@@ -85,7 +93,7 @@ On the box, in `/root/cicatrixa-platform` (the repo's `platform/` directory):
 
 | file | job |
 |---|---|
-| `main.py` | routes, auth cookies, SSE, webhooks (GitHub push, Stripe) |
+| `main.py` | routes, auth cookies, signup + email code, forgot/reset password, SSE, webhooks (GitHub push, Stripe) |
 | `engine.py` | the deploy pipeline: clone → analyze → Dockerfile → build → run → port-detect → label → smoke test. Blue/green; old container serves until the new one verifies |
 | `ai.py` | OpenAI Responses API: writes Dockerfiles, diagnoses failures, smoke-test verdicts. Falls back to node/python/go/static heuristics with no API key |
 | `watchdog.py` | 3 loops: GitHub poll (180s), container health (60s, restart ×2 then rebuild), metrics (60s) |
@@ -125,6 +133,17 @@ freezes every request in the process.
 
 - Never point `cicatrixa.com` (apex) at the VPS again — it belongs to Vercel.
 - Never publish host ports on user containers; route by Traefik label.
+- Tunnel mode (`COMPOSE_PROFILES=tunnel` in `.env`) sets `HTTPS_REDIRECT_MW=cx-plain`: Traefik sees
+  plain HTTP from the tunnel even for HTTPS visitors, so its own redirect would loop. Cloudflare's
+  **Always Use HTTPS** does the redirect instead, and sign-in depends on it (cookies are Secure).
+  `verify-public.sh` checks the visitor's path in this mode — out through public DNS to Cloudflare
+  and back through the tunnel — instead of waiting for a Let's Encrypt certificate.
+- With `ADMIN_EMAILS` set, only those addresses become admins at signup. Without it, the first
+  account on a fresh instance does — on a public instance, whoever signs up first.
+- Password reset links are signed tokens bound to the current password hash (`auth.make_reset`):
+  setting a new password kills every link issued for the old one, so no table tracks them. With
+  email off or failing, `/admin` → "reset pw" makes a link to hand over manually, and `/admin`
+  shows Resend's last error — "domain is not verified" there means nobody can get a signup code.
 - Verify with `platform/verify-public.sh` on the box, never "compose said OK", never `curl -k`
   (`-k` accepts Traefik's self-signed fallback, so it passes on a box nobody can reach). It
   passes only on a **trusted** certificate. A certificate issued *during the run* proves Let's

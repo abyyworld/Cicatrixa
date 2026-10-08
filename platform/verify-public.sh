@@ -49,6 +49,142 @@ cert_issued_at() {
 
 say() { printf '  %s\n' "$*"; }
 
+# ── Tunnel mode ─────────────────────────────────────────────────────────────
+# With COMPOSE_PROFILES=tunnel (tunnel.sh), nothing on this machine faces the
+# internet: cx-tunnel dials out to Cloudflare, and TLS ends at Cloudflare's edge.
+# There is no Let's Encrypt certificate to wait for and no public IP for DNS to
+# match — so the test is the visitor's own path. A request from here to
+# https://app.<domain> leaves this machine, finds Cloudflare through public DNS
+# and comes back in through the tunnel: a wrong record, a missing route or a dead
+# tunnel fails it exactly as it fails a visitor, and there is no inbound firewall
+# for an outside check to see. tunnel.sh runs this on macOS too: bash 3.2, no
+# GNU-only flags, no getent, in this branch.
+tunnel_mode() {
+  grep -qE '^COMPOSE_PROFILES=([^#]*,)?tunnel([,[:space:]]|$)' .env 2>/dev/null
+}
+
+# The tunnel's ID, which is what the DNS records must point at, read out of the
+# token (base64 JSON; "t" is the tunnel). Decoded inside cx-control so it works
+# the same on every OS, and fed on stdin so the token never shows up in `ps`.
+tunnel_id() {
+  grep -E '^CLOUDFLARE_TUNNEL_TOKEN=' .env | tail -1 | cut -d= -f2- \
+    | docker compose exec -T control python -c "
+import base64, json, sys
+t = sys.stdin.read().strip()
+print(json.loads(base64.b64decode(t + '=' * (-len(t) % 4)))['t'])" 2>/dev/null || true
+}
+
+tunnel_dns_help() {
+  local id; id="$(tunnel_id)"
+  echo
+  echo "  In Cloudflare → $BASE_DOMAIN → DNS. Both records PROXIED (orange cloud):"
+  echo "    app   CNAME  ${id:-<tunnel-id>}.cfargotunnel.com   (made for you when you add the route below)"
+  echo "    *     CNAME  ${id:-<tunnel-id>}.cfargotunnel.com   (add this one yourself — the dashboard does not)"
+  echo "  Delete the old app and * records first: Cloudflare will not add a record next"
+  echo "  to an existing one of the same name. Leave $BASE_DOMAIN and www alone (Vercel)."
+  echo
+  echo "  In Zero Trust → Networks → Tunnels → this tunnel → routes / public hostnames:"
+  echo "    app.$BASE_DOMAIN   →  HTTP  cx-traefik:80"
+  echo "    *.$BASE_DOMAIN     →  HTTP  cx-traefik:80"
+}
+
+verify_tunnel() {
+  local up="" t0 hdrs body rc code server last="" verdict=1 probe
+  local timeout="${VERIFY_TIMEOUT:-90}"    # seconds; DNS edits on Cloudflare land in about one
+
+  # 1. Here: Traefik routes the app host to the control plane. Asked from inside
+  #    cx-control, since in this mode no host port is meant to be used.
+  for _ in $(seq 1 12); do
+    if docker compose exec -T control python -c "
+import sys, urllib.request as u
+r = u.Request('http://cx-traefik/healthz', headers={'Host': sys.argv[1]})
+sys.exit(0 if u.urlopen(r, timeout=5).status == 200 else 1)" "$HOST" >/dev/null 2>&1; then
+      up=1; break
+    fi
+    sleep "$STEP"
+  done
+  if [ -z "$up" ]; then
+    echo "✗ Traefik is not answering for $HOST on this machine — the stack itself is down." >&2
+    docker compose ps >&2 2>/dev/null || true
+    docker compose logs --tail 40 traefik control >&2 2>/dev/null || true
+    return 1
+  fi
+  say "stack is up (Traefik routes $HOST to the control plane on this machine)"
+
+  # 2. The visitor's path, through public DNS and Cloudflare's edge.
+  hdrs="$(mktemp)"
+  t0="$(date +%s)"
+  while :; do
+    : > "$hdrs"
+    body="$(curl -sS --max-time 15 -D "$hdrs" "https://$HOST/healthz" 2>&1)"
+    rc=$?
+    case "$body" in *'"ok"'*) [ "$rc" -eq 0 ] && break ;; esac
+    # Header lines end in CR; strip it before anything reads a field.
+    code="$(tr -d '\r' < "$hdrs" | awk 'toupper($1) ~ /^HTTP\// {c=$2} END {print c}')"
+    server="$(tr -d '\r' < "$hdrs" | awk -F': *' 'tolower($1) == "server" {print tolower($2)}' | tail -1)"
+    case "$rc:$server:$code:$body" in
+      6:*)          verdict=2; last="nothing answers to the name $HOST: it has no DNS record" ;;
+      *:*vercel*)   verdict=2; last="$HOST is still answered by Vercel — its DNS record points there" ;;
+      *:cloudflare:*1033*) verdict=1; last="Cloudflare has no live tunnel for $HOST: cx-tunnel is not connected" ;;
+      *:cloudflare:*1016*) verdict=2; last="$HOST points at a tunnel that does not exist — the CNAME target is wrong" ;;
+      *:cloudflare:502:*)  verdict=1; last="the tunnel cannot reach the service its route names: it must be HTTP cx-traefik:80" ;;
+      *:cloudflare:404:*)  verdict=1; last="404 through Cloudflare: the tunnel has no route for $HOST" ;;
+      *:cloudflare:*)      verdict=1; last="HTTP ${code:-?} from Cloudflare" ;;
+      0:*)          verdict=1; last="HTTP ${code:-?} from ${server:-an unknown server}, not the platform" ;;
+      *)            verdict=2; last="no answer from $HOST (curl exit $rc) — its record probably still points at an old server" ;;
+    esac
+    if [ $(( $(date +%s) - t0 )) -ge "$timeout" ]; then
+      rm -f "$hdrs"
+      echo
+      if [ "$verdict" -eq 2 ]; then
+        echo "… PENDING — the stack and the tunnel are up here, but $last."
+      else
+        echo "✗ $HOST does not reach this machine: $last." >&2
+        echo "  The tunnel's own account of it:" >&2
+        docker compose logs --tail 15 tunnel >&2 2>/dev/null || true
+        echo "  A token rejected there means CLOUDFLARE_TUNNEL_TOKEN in .env is wrong." >&2
+      fi
+      tunnel_dns_help
+      return "$verdict"
+    fi
+    sleep "$STEP"
+  done
+  rm -f "$hdrs"
+  echo
+  echo "✓ $HOST is live through the Cloudflare tunnel. That request left this machine,"
+  echo "  found Cloudflare through public DNS and came back in through the tunnel —"
+  echo "  the same path a visitor's takes."
+
+  # 3. Sign-in cookies are HTTPS-only. If http:// is served rather than redirected,
+  #    anyone who types it gets a login form that silently never logs them in.
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "http://$HOST/healthz" 2>/dev/null || true)"
+  case "$code" in
+    301|302|307|308) say "http:// redirects to https:// (Always Use HTTPS is on)" ;;
+    *) echo "  ! http://$HOST answers $code instead of redirecting to https://, and sign-in"
+       echo "    needs HTTPS. Cloudflare → SSL/TLS → Edge Certificates → Always Use HTTPS: On." ;;
+  esac
+
+  # 4. The projects people deploy live at <slug>.<domain>: the * record and route.
+  #    A name nobody has used, so no cache has an answer for it; the platform's
+  #    catch-all router answers /healthz for any host that reaches it.
+  probe="cx-probe-$(date +%s).$BASE_DOMAIN"
+  body="$(curl -sS --max-time 15 "https://$probe/healthz" 2>&1 || true)"
+  case "$body" in
+    *'"ok"'*) say "projects: *.$BASE_DOMAIN reaches this machine too" ;;
+    *) echo
+       echo "… PENDING — sign-up and login work, but *.$BASE_DOMAIN does not reach this"
+       echo "  machine ($probe: ${body:0:120}), so the projects people deploy will not load."
+       tunnel_dns_help
+       return 2 ;;
+  esac
+  return 0
+}
+
+if tunnel_mode; then
+  verify_tunnel
+  exit $?
+fi
+
 # ── 1. is the stack up at all? ──────────────────────────────────────────────
 up=""
 for _ in $(seq 1 12); do

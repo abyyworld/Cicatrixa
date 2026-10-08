@@ -6,8 +6,23 @@
   <div class="lbl-caps">instance-wide view</div>
   <h1>Instance <em>admin</em></h1>
   <p class="sub">Base URL: <code>{{ base_url }}</code> · wildcard: <code>*.{{ base_domain }}</code>
-    · AI: <code>{{ 'on' if ai_on else 'off — set OPENAI_API_KEY' }}</code></p>
+    · AI: <code>{{ 'on' if ai_on else 'off — set OPENAI_API_KEY' }}</code>
+    · email: <code>{{ ('failing' if mail_error else 'on') if mail_on else 'off — set RESEND_API_KEY' }}</code></p>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if mail_error %}<div class="err">Email is failing, so new accounts cannot get their
+    verification code and password resets do not arrive. Last answer:
+    <code>{{ mail_error }}</code>. "Domain is not verified" means adding DNS records for
+    the sending domain at resend.com/domains.</div>{% endif %}
+  {% if reset_link %}
+  <div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:16px 22px">
+    <h2 style="margin-top:0">Reset link for {{ reset_email }}</h2>
+    <p class="muted" style="font-size:13px;margin-top:0">Send this to them yourself. It works
+      once, for an hour, and lets whoever opens it set the password — check you are
+      sending it to the person who owns the account.</p>
+    <input type="text" readonly value="{{ reset_link }}" onclick="this.select()"
+           style="width:100%;font-size:12px">
+  </div>
+  {% endif %}
 
   <div class="card" style="margin-bottom:14px;padding:16px 22px">
     <div class="lbl-caps" style="margin-bottom:10px">growth</div>
@@ -152,6 +167,9 @@
           {% endif %}
           <form method="post" action="/admin/users/{{ row.user.id }}/paid" style="display:inline;margin:0 0 0 6px">
             <button class="btn ghost sm" title="Extend paid period by 30 days; first payment credits the referrer's +20% bonus">+30d</button>
+          </form>
+          <form method="post" action="/admin/users/{{ row.user.id }}/reset-link" style="display:inline;margin:0 0 0 6px">
+            <button class="btn ghost sm" title="Make a one-time password reset link to send this person by hand">reset pw</button>
           </form>
         </td>
         <td>

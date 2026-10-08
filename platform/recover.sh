@@ -158,7 +158,9 @@ DEST=/root/cicatrixa-platform
 # SERVER, which may be a VPN, Tailscale or LAN address that never passes the
 # provider firewall this check exists to see. Laptop-side code avoids bash-4-only
 # features: it runs under macOS's /bin/bash 3.2.
-remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"'
+# A box in tunnel mode (tunnel.sh) has no public address to pin to: visitors
+# reach it through Cloudflare, so the request below goes the way theirs do.
+remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"; t=$(grep -cE "^COMPOSE_PROFILES=([^#]*,)?tunnel([,[:space:]]|$)" '"$DEST"'/.env 2>/dev/null); echo "T=$t"'
 sshrc=0
 info="$(ssh -o ConnectTimeout=15 "$SERVER" "$remote" 2>&1)" || sshrc=$?
 if [ "$sshrc" -ne 0 ]; then
@@ -167,6 +169,8 @@ if [ "$sshrc" -ne 0 ]; then
 fi
 BOX_DOMAIN="$(printf '%s\n' "$info" | sed -n 's/^D=//p' | tail -1)"
 PUBLIC_IP="$(printf '%s\n' "$info" | sed -n 's/^I=//p' | tail -1)"
+TUNNEL="$(printf '%s\n' "$info" | sed -n 's/^T=//p' | tail -1)"
+[ "${TUNNEL:-0}" = "0" ] || PUBLIC_IP=""
 if [ -z "$BOX_DOMAIN" ]; then
   echo "✗ BASE_DOMAIN is not set in $DEST/.env on the box" >&2
   exit 1
@@ -189,6 +193,10 @@ if body="$(curl -sS --max-time 20 ${PIN:+--resolve "$PIN"} "https://app.$BOX_DOM
   echo "✓ reachable from the internet: $body"
 else
   echo "✗ the box says it is up, but it is NOT reachable from here: $body" >&2
-  echo "  check the provider firewall / security list for 80 and 443." >&2
+  if [ "${TUNNEL:-0}" = "0" ]; then
+    echo "  check the provider firewall / security list for 80 and 443." >&2
+  else
+    echo "  the box is in tunnel mode: on it, ./verify-public.sh says what Cloudflare is missing." >&2
+  fi
   exit 1
 fi
