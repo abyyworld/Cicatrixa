@@ -203,35 +203,45 @@ async def request_access_submit(request: Request, email: str = Form(...)):
     return render(request, "request_access.html", error=None, sent=True, message=message)
 
 
-# A code email goes out at most once a minute per account: signing up with
-# somebody else's address and then pressing Resend, or logging in over and over,
-# would otherwise flood their inbox and spend the Resend quota everyone shares.
+# A new code at most once a minute per account, whether or not its email went
+# out: signing up with somebody else's address and pressing Resend, or logging in
+# over and over, would otherwise flood their inbox and spend the shared Resend
+# quota — and each new code is 5 more guesses.
 CODE_COOLDOWN = 60
-# Wrong guesses allowed per code. The code then dies and a new one has to be
-# sent, which the cooldown paces: 5 guesses a minute against a million codes.
+# Wrong guesses allowed per code; the code then dies. Across codes, an account
+# gets CODE_STRIKES wrong guesses an hour and then no new code until the hour is
+# out: 25 guesses an hour against a million codes is years for a 50% chance.
 CODE_ATTEMPTS = 5
-_code_sent_at: dict[int, float] = {}
+CODE_STRIKES = 25
+_code_issued_at: dict[int, float] = {}
 _code_failures: dict[int, int] = {}
+_code_strikes: dict[int, list[float]] = {}
+
+
+def _strikes(user_id: int) -> list[float]:
+    recent = [t for t in _code_strikes.get(user_id, []) if time.time() - t < 3600]
+    _code_strikes[user_id] = recent
+    return recent
 
 
 async def _issue_code(user_id: int, email: str) -> str:
-    """Email a fresh code: "sent", "failed", or "cooldown" when one went out under a
-    minute ago and is still good.
+    """Email a fresh code: "sent", "failed", "cooldown" (a code was made under a
+    minute ago), or "blocked" (too many wrong guesses this hour).
 
     Awaited, not fired and forgotten: a send that failed used to leave the person
     on a page saying "we sent a code" that was never coming, with no way to learn
     otherwise. Now the page says so, and /admin shows Resend's reason."""
-    row = db.one("SELECT verify_code, verify_expires FROM users WHERE id=?", (user_id,))
-    if (row and row["verify_code"] and (row["verify_expires"] or 0) > db.now()
-            and time.time() - _code_sent_at.get(user_id, 0) < CODE_COOLDOWN):
+    if len(_strikes(user_id)) >= CODE_STRIKES:
+        return "blocked"
+    if time.time() - _code_issued_at.get(user_id, 0) < CODE_COOLDOWN:
         return "cooldown"
+    _code_issued_at[user_id] = time.time()     # before the await: a second request waits
     code = auth.generate_code()
     db.q("UPDATE users SET verify_code=?, verify_expires=? WHERE id=?",
          (code, db.now() + auth.CODE_TTL, user_id))
     _code_failures.pop(user_id, None)
     if not await _in(_MAIL_POOL, mailer.send_verification_code, email, code):
         return "failed"
-    _code_sent_at[user_id] = time.time()
     return "sent"
 
 
@@ -250,14 +260,16 @@ async def _start_verification(user_id: int, email: str,
         db.q("UPDATE users SET email_verified=1 WHERE id=?", (user_id,))
         return _signed_in(user_id, then)
     outcome = await _issue_code(user_id, email)
-    return _pending(RedirectResponse("/verify-code" + ("?unsent=1" if outcome == "failed"
-                                                       else ""),
-                                     status_code=303), user_id)
+    flag = {"sent": "", "cooldown": "", "failed": "?unsent=1", "blocked": "?blocked=1"}
+    return _pending(RedirectResponse("/verify-code" + flag[outcome], status_code=303),
+                    user_id)
 
 
 def _pending_user(request: Request):
-    uid = auth.pending_user_id(request.cookies.get(auth.PENDING_COOKIE_NAME))
-    return db.one("SELECT * FROM users WHERE id=?", (uid,)) if uid else None
+    """Who is between signup and their code — never an account that is already
+    verified: a pending cookie must not become a way into one without its password."""
+    user = auth.pending_user(request.cookies.get(auth.PENDING_COOKIE_NAME))
+    return user if user and not user["email_verified"] else None
 
 
 @app.get("/verify-code", response_class=HTMLResponse)
@@ -265,12 +277,10 @@ async def verify_code_page(request: Request):
     user = _pending_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    if user["email_verified"]:
-        return RedirectResponse("/dashboard", status_code=303)
     qp = request.query_params
     return render(request, "verify_code.html", user=None, pending_email=user["email"],
                   error=qp.get("error"), resent=qp.get("resent"), unsent=qp.get("unsent"),
-                  wait=qp.get("wait"))
+                  wait=qp.get("wait"), blocked=qp.get("blocked"))
 
 
 @app.post("/verify-code")
@@ -285,13 +295,13 @@ async def verify_code_submit(request: Request, code: str = Form(...)):
     if not valid:
         error = "That code is incorrect or has expired."
         if user["verify_code"]:
+            _strikes(user["id"]).append(time.time())
             failures = _code_failures.get(user["id"], 0) + 1
             _code_failures[user["id"]] = failures
-            if failures >= CODE_ATTEMPTS:
+            if failures >= CODE_ATTEMPTS or len(_strikes(user["id"])) >= CODE_STRIKES:
                 db.q("UPDATE users SET verify_code=NULL, verify_expires=NULL WHERE id=?",
                      (user["id"],))
                 _code_failures.pop(user["id"], None)
-                _code_sent_at.pop(user["id"], None)
                 error = "Too many wrong codes. Press Resend code for a new one."
         return render(request, "verify_code.html", user=None, pending_email=user["email"],
                       error=error)
@@ -311,8 +321,10 @@ async def verify_code_resend(request: Request):
     if not user:
         return RedirectResponse("/login", status_code=303)
     outcome = await _issue_code(user["id"], user["email"])
-    flag = {"sent": "resent=1", "failed": "unsent=1", "cooldown": "wait=1"}[outcome]
-    return _pending(RedirectResponse("/verify-code?" + flag, status_code=303), user["id"])
+    flag = {"sent": "resent=1", "failed": "unsent=1", "cooldown": "wait=1",
+            "blocked": "blocked=1"}[outcome]
+    # The pending cookie is not renewed: it lasts PENDING_TTL from signup or login.
+    return RedirectResponse("/verify-code?" + flag, status_code=303)
 
 
 @app.post("/verify-code/cancel")
@@ -570,6 +582,10 @@ async def _apply_fix(project_id: int, message_id: int):
             await engine.deploy(service_id, "chat-fix")
         else:
             medic.add_message(project_id, "agent", f"✖ {text}", kind="status")
+    except Exception as exc:
+        # Nobody is waiting on a page for this any more: say it in the chat.
+        medic.add_message(project_id, "agent", f"✖ Applying the fix failed: {exc}",
+                          kind="status")
     finally:
         _applying.discard(message_id)
 
@@ -723,7 +739,12 @@ async def project_events(request: Request, project_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return JSONResponse({"error": "not found"}, status_code=404)
-    return StreamingResponse(bus.subscribe(f"project:{project_id}"),
+    async def alive() -> bool:
+        # Still there, and still signed in: a password reset ends open streams too.
+        return (not await request.is_disconnected()
+                and current_user(request) is not None)
+
+    return StreamingResponse(bus.subscribe(f"project:{project_id}", alive),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
@@ -760,50 +781,84 @@ async def connect_start(request: Request):
         f"https://github.com/apps/{gh.app_slug()}/installations/new?state={state}")
 
 
+@app.get("/connect/github/authorize")
+async def connect_authorize(request: Request):
+    """For an installation that already exists: GitHub's OAuth page, which comes
+    back to the callback with a code, so connect_setup can see what is theirs."""
+    user = current_user(request)
+    if not user:
+        return need_login(request)
+    url = gh.authorize_url(auth.make_gh_state(user["id"]), BASE_URL)
+    if not url:
+        return RedirectResponse("/connect/github", status_code=303)
+    return RedirectResponse(url)
+
+
 @app.get("/connect/github/setup")
 @app.get("/connect/github/callback")
 async def connect_setup(request: Request):
-    """GitHub sends the user back here after installing the App.
+    """GitHub sends the person back here after installing the App, or after
+    authorizing it (/connect/github/authorize).
 
-    The installation_id in the URL proves nothing: anyone can type one, the ids are
-    sequential, and binding someone else's would hand over their private repos.
-    So an installation already connected to another account is refused, and a new
-    one needs proof from GitHub that the person here can see it — the OAuth code
-    GitHub adds when the App asks for authorization on install (build_manifest)."""
+    Nothing in this URL can be taken on trust. installation_id can be typed, and
+    the ids are sequential; binding someone else's hands over their private repos.
+    So:
+      - the state must be one this same signed-in account started (connect_start
+        or connect_authorize) — a link from elsewhere cannot bind anything to the
+        person who clicks it, nor their installation to whoever made the link;
+      - GitHub's OAuth code must show the installation is on an account they
+        control: their own, or an organisation they administer (seeing it is not
+        enough — gh.installations_user_controls);
+      - one already connected to another account is refused."""
     params = request.query_params
-    uid = auth.gh_state_user_id(params.get("state"))
     user = current_user(request)
-    if uid is None and user:
-        uid = user["id"]
-    try:
-        installation_id = int(params.get("installation_id", ""))
-    except ValueError:
-        installation_id = None
-    if installation_id is None or uid is None:
-        return RedirectResponse("/connect/github", status_code=303)
+    if not user:
+        return RedirectResponse("/login?" + urlencode({"next": "/connect/github"}),
+                                status_code=303)
 
     def refuse(why: str):
         return RedirectResponse("/connect/github?" + urlencode({"error": why}),
                                 status_code=303)
 
-    if db.one("SELECT 1 FROM github_connections WHERE kind='app' AND installation_id=? "
-              "AND user_id<>?", (installation_id, uid)):
+    if auth.gh_state_user_id(params.get("state")) != user["id"]:
+        return refuse("That GitHub link was not started from this account. "
+                      "Connect from this page.")
+    try:
+        wanted = int(params["installation_id"]) if params.get("installation_id") else None
+    except ValueError:
+        wanted = None
+    if wanted and db.one("SELECT 1 FROM github_connections WHERE kind='app' "
+                         "AND installation_id=? AND user_id=?", (wanted, user["id"])):
+        return RedirectResponse("/projects/new", status_code=303)   # already theirs
+    if not params.get("code"):
+        return refuse("GitHub did not send an authorization. If the App is already "
+                      "installed, use \"Already installed? Connect it\" below.")
+    controlled = await asyncio.to_thread(gh.installations_user_controls, params["code"])
+    if controlled is None:
+        return refuse("GitHub did not accept the authorization. Try again.")
+
+    def bound_elsewhere(iid: int) -> bool:
+        return bool(db.one("SELECT 1 FROM github_connections WHERE kind='app' "
+                           "AND installation_id=? AND user_id<>?", (iid, user["id"])))
+
+    if wanted:
+        if wanted not in controlled:
+            return refuse("That installation is not on your own GitHub account or an "
+                          "organisation you administer. Ask an owner to connect it.")
+        chosen = wanted
+    else:
+        free = [i for i in controlled if not bound_elsewhere(i)]
+        if not free:
+            return refuse("The App is not installed on your GitHub account or on an "
+                          "organisation you administer. Install it first.")
+        chosen = max(free, key=lambda i: controlled[i].get("created_at") or "")
+    if bound_elsewhere(chosen):
         return refuse("That GitHub installation is already connected to another account.")
-    ours = db.one("SELECT 1 FROM github_connections WHERE kind='app' AND installation_id=? "
-                  "AND user_id=?", (installation_id, uid))
-    if not ours:
-        code = params.get("code")
-        if code:
-            visible = await asyncio.to_thread(gh.user_installation_ids, code)
-            if visible is None or installation_id not in visible:
-                return refuse("GitHub did not confirm that installation is yours. "
-                              "Connect again from this page.")
-        elif gh.oauth_on_install():
-            return refuse("GitHub sent no authorization with that installation. "
-                          "Connect again from this page.")
-    db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (uid,))
+    db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (user["id"],))
     db.q("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,created_at)"
-         " VALUES(?,?,?,?,?)", (uid, "app", installation_id, "", db.now()))
+         " VALUES(?,?,?,?,?)", (user["id"], "app", chosen,
+                                (controlled[chosen].get("account") or {}).get("login", ""),
+                                db.now()))
     return RedirectResponse("/projects/new", status_code=303)
 
 

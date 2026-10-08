@@ -125,14 +125,18 @@ git clone https://github.com/abyyworld/cicatrixa.git && cd cicatrixa/platform
 BASE_DOMAIN=cicatrixa.com CLOUDFLARE_TUNNEL_TOKEN='eyJ...' ADMIN_EMAILS=you@example.com ./tunnel.sh
 ```
 
-`ADMIN_EMAILS` is the address you will sign up with yourself (comma-separate several);
-`tunnel.sh` will not start without it. Signing up with it does **not** make you admin by
-itself — with email off, anyone could type it. Either the emailed code proves it (needs
-`RESEND_API_KEY`), or, after you sign up, run this on the machine:
+`ADMIN_EMAILS` is your own address (comma-separate several); `tunnel.sh` will not start
+without it. Typing an address into the signup form does **not** make anyone admin — with email
+off, anyone could type yours. Make your admin account on the machine instead:
 
 ```bash
 docker exec cx-control python -m app.promote you@example.com
 ```
+
+It creates the account (or takes it back, if someone registered your address first: their
+password and sessions go) and prints a one-time link, valid for an hour, to choose its password.
+With `RESEND_API_KEY` set, signing up as an `ADMIN_EMAILS` address and entering the emailed code
+works too.
 
 Add `OPENAI_API_KEY=sk-...` (and `RESEND_API_KEY`, Stripe keys) on the same line when you have
 them; everything is kept in `platform/.env` (mode 600, never committed). It ends with
@@ -142,7 +146,7 @@ subdomain arrives too:
 
 | result | meaning |
 |---|---|
-| `✓ … is live through the Cloudflare tunnel` (exit 0) | sign up at `https://app.cicatrixa.com/signup` as your `ADMIN_EMAILS` address, then become admin as above (the script prints the command) |
+| `✓ … is live through the Cloudflare tunnel` (exit 0) | make your admin account as above (the script prints the command); everyone else signs up at `https://app.cicatrixa.com/signup` |
 | `… PENDING` (exit 2) | the stack runs here; a DNS record or route is missing, Always Use HTTPS is off, or the tunnel has not connected — it says which, with the tunnel ID filled in |
 | `✗` (exit 1) | stack down, tunnel not connected (a wrong token shows in the tunnel's log it prints), or a route pointing somewhere other than `cx-traefik:80` |
 
@@ -164,6 +168,21 @@ docker exec cx-control python -c "import sqlite3;s=sqlite3.connect(\"file:/data/
   && [ "$(head -c 15 "$f.tmp")" = "SQLite format 3" ] && mv "$f.tmp" "$f" && echo "saved $f" \
   || { echo "backup FAILED" >&2; rm -f "$f.tmp"; }
 ```
+
+### Payments (any box)
+
+The 14-day trial needs nothing. To take the $2.99 subscription, Stripe has to tell the platform
+when someone pays — without the webhook, people can pay and never be credited:
+
+1. Stripe dashboard → **Developers → API keys**: the secret key → `STRIPE_SECRET_KEY`.
+2. **Developers → Webhooks → Add endpoint**: URL `https://app.cicatrixa.com/api/webhooks/stripe`,
+   events **`checkout.session.completed`** and **`invoice.paid`**. Its signing secret
+   (`whsec_…`) → `STRIPE_WEBHOOK_SECRET`.
+3. Put both in `platform/.env` (or pass them to `tunnel.sh` / `bootstrap.sh`, which write them
+   there) and re-run the same script.
+
+Each invoice counts once, whichever of the two events arrives first and however often Stripe
+retries it.
 
 ### Oracle only — the console clicks that matter
 
@@ -362,7 +381,8 @@ answering at all:
 |---|---|---|
 | `app.cicatrixa.com/signup` is a 404, or the marketing page | `app` still points at Vercel — no control plane anywhere | bring one up: "Free: Cloudflare Tunnel" or a box above |
 | signup works, then "enter your code" and no email ever arrives | `RESEND_API_KEY` is set but Resend refuses to send — usually the sending domain is not verified, which only lets the Resend account's owner receive mail | `/admin` shows Resend's last answer; verify the domain at resend.com/domains, or remove the key (then signups skip the code) |
-| you signed up but are not admin | an address in `ADMIN_EMAILS` becomes admin only once its emailed code is entered — with email off, nothing proves it is yours | on the server: `docker exec cx-control python -m app.promote you@example.com` |
+| you are not admin | an address in `ADMIN_EMAILS` becomes admin only once its emailed code is entered — with email off, nothing proves it is yours | on the server: `docker exec cx-control python -m app.promote you@example.com`, then open the link it prints to set the password |
+| "Connect GitHub" comes back with an error | the App asks for authorization when it is installed; that authorization is how Cicatrixa learns the installation is on your own account or an organisation you administer | install from the Connect page and press **Authorize** on GitHub; if it was installed already, use **Already installed? Connect it**. An organisation's installation must be connected by one of its owners |
 | someone forgot their password | — | "Forgot your password?" on the login page emails a one-hour, one-use link. With email off or failing: `/admin` → **reset pw** next to the user, and send them the link yourself |
 
 ## What each check proves

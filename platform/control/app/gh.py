@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from urllib.parse import urlencode
 
 import httpx
 import jwt
@@ -79,8 +80,10 @@ def build_manifest(base_url: str) -> dict:
         # installations on the permissions they already accepted, so adding it
         # here changes nothing for current users until they choose to update —
         # which is exactly the rollout we want.
+        # members:read lets connect_setup ask GitHub whether the person connecting
+        # an organisation's installation administers that organisation.
         "default_permissions": {"contents": "write", "metadata": "read",
-                                "pull_requests": "write"},
+                                "pull_requests": "write", "members": "read"},
         "default_events": ["push", "pull_request"],
     }
 
@@ -97,20 +100,30 @@ def exchange_manifest_code(code: str) -> dict:
     db.set_setting("gh_app_webhook_secret", data["webhook_secret"] or "")
     db.set_setting("gh_app_client_id", data.get("client_id", ""))
     db.set_setting("gh_app_client_secret", data.get("client_secret", ""))
-    db.set_setting("gh_app_oauth_on_install", "1")   # what build_manifest asked for
     return data
 
 
-def oauth_on_install() -> bool:
-    """True for an App created from build_manifest since it asks for authorization
-    on install — so a return from GitHub without an OAuth code is not to be trusted."""
-    return db.setting("gh_app_oauth_on_install") == "1"
+def authorize_url(state: str, base_url: str) -> str | None:
+    """GitHub's OAuth page for this App, for someone whose installation already
+    exists (reconnecting after a disconnect, or installed from GitHub directly):
+    it comes back to the same callback with a code and no installation_id."""
+    client_id = db.setting("gh_app_client_id")
+    if not client_id:
+        return None
+    return "https://github.com/login/oauth/authorize?" + urlencode({
+        "client_id": client_id, "state": state,
+        "redirect_uri": f"{base_url}/connect/github/callback"})
 
 
-def user_installation_ids(code: str) -> set[int] | None:
-    """Trade the OAuth code GitHub sends after an install for the installer's own
-    token, and return the ids of this App's installations they can see. None if
-    the code cannot be used."""
+def installations_user_controls(code: str) -> dict[int, dict] | None:
+    """Trade the OAuth code GitHub sends after an install (or an authorize) for the
+    person's own token, and return this App's installations on an account they
+    control: their own, or an organisation they administer. None if the code
+    cannot be used.
+
+    Seeing an installation is not enough. /user/installations lists every one the
+    person can read anything through — a single repo as a collaborator, or plain
+    organisation membership — and an installation token reaches ALL of its repos."""
     client_id = db.setting("gh_app_client_id")
     secret = db.setting("gh_app_client_secret")
     if not (code and client_id and secret):
@@ -123,14 +136,26 @@ def user_installation_ids(code: str) -> set[int] | None:
         token = r.json().get("access_token") if r.status_code == 200 else None
         if not token:
             return None
-        ids: set[int] = set()
+        me = _get(token, "/user")
+        controlled: dict[int, dict] = {}
         page = 1
         while True:
             found = _get(token, "/user/installations",
                          {"per_page": 100, "page": page}).get("installations", [])
-            ids.update(i["id"] for i in found)
+            for inst in found:
+                account = inst.get("account") or {}
+                if account.get("type") == "User":
+                    if account.get("id") == me.get("id"):
+                        controlled[inst["id"]] = inst
+                elif account.get("type") == "Organization" and account.get("login"):
+                    try:
+                        m = _get(token, f"/user/memberships/orgs/{account['login']}")
+                    except Exception:
+                        continue          # no answer is no proof
+                    if m.get("role") == "admin" and m.get("state") == "active":
+                        controlled[inst["id"]] = inst
             if len(found) < 100:
-                return ids
+                return controlled
             page += 1
     except Exception:
         return None

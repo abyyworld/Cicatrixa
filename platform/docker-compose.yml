@@ -28,6 +28,56 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
     networks: [cxnet, healnet]
     restart: unless-stopped
+    # The middlewares every app's routers use live HERE, on cx-traefik, which has no
+    # healthcheck and runs whenever routing does. On cx-control they vanished each
+    # time it restarted, crash-looped or was recreated (the way HTTPS_REDIRECT_MW is
+    # changed): Traefik drops a stopped or starting container's labels, and every
+    # app router naming cx-app-web then failed until cx-control was back.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=cxnet"
+      # Labels alone define nothing without a router and a service, else Traefik
+      # makes a default router for this container. This one matches no real host.
+      - "traefik.http.routers.cx-middlewares.rule=Host(`cx-middlewares.invalid`)"
+      - "traefik.http.routers.cx-middlewares.entrypoints=web"
+      - "traefik.http.routers.cx-middlewares.service=noop@internal"
+      - "traefik.http.services.cx-middlewares.loadbalancer.server.port=80"
+      - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
+      # 302, not 301: a permanent redirect to a :443 that cannot answer is cached by
+      # browsers indefinitely, so flipping HTTPS_REDIRECT_MW later would not rescue
+      # anyone who already visited.
+      - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=false"
+      # HTTPS_REDIRECT_MW=cx-plain swaps the redirect for a harmless middleware, so a
+      # certificate that fails to issue degrades to plain HTTP instead of blacking out
+      # the site (an unreachable :443 behind a permanent redirect looks like a timeout).
+      - "traefik.http.middlewares.cx-plain.compress=true"
+      # What every USER APP's :80 router runs. Apps reference this fixed name rather
+      # than carrying the switch in their own labels, which are frozen when the
+      # container is created — so flipping HTTPS_REDIRECT_MW and recreating
+      # cx-traefik re-points every running app at once, no redeploys. cx-app-tls is
+      # the same for their :443 routers.
+      # cx-retry: a request that cannot reach a container at all (still starting
+      # during a deploy, or just died) is sent to another one behind the same app
+      # instead of becoming a 502. Only connection failures are retried — nothing
+      # the app has answered — so a POST is never sent twice.
+      - "traefik.http.middlewares.cx-app-web.chain.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https},cx-retry"
+      - "traefik.http.middlewares.cx-app-tls.chain.middlewares=cx-retry"
+      - "traefik.http.middlewares.cx-retry.retry.attempts=3"
+      - "traefik.http.middlewares.cx-retry.retry.initialinterval=100ms"
+      # HTTPS_REDIRECT_MW=cx-tunnel (tunnel.sh). TLS ended at Cloudflare, and Traefik's
+      # plain :80 entrypoint overwrites the X-Forwarded-Proto: https that cloudflared
+      # passes on with "http" — so an app that forces HTTPS (Rails force_ssl, Django
+      # SECURE_SSL_REDIRECT, Express on req.secure) would redirect forever, and its
+      # secure cookies never stick. Every request here did arrive over HTTPS:
+      # Cloudflare's Always Use HTTPS redirects the rest before they reach the tunnel.
+      # No compress either: it holds a response's headers until its first byte, and
+      # Cloudflare cuts a response with no headers after ~100 s (live logs, SSE).
+      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Proto=https"
+      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Port=443"
+      # Cloudflare would otherwise keep apps' .js/.css/images at its edge for hours,
+      # and nothing here can purge it after a redeploy or a heal. Browsers' own
+      # caching is untouched: this header is read by Cloudflare alone.
+      - "traefik.http.middlewares.cx-tunnel.headers.customresponseheaders.Cloudflare-CDN-Cache-Control=no-store"
 
   control:
     build: ./control
@@ -84,34 +134,6 @@ services:
       - "traefik.http.routers.cx-control-fallback.entrypoints=web"
       - "traefik.http.routers.cx-control-fallback.service=cx-control"
       - "traefik.http.services.cx-control.loadbalancer.server.port=8090"
-      - "traefik.http.middlewares.cx-to-https.redirectscheme.scheme=https"
-      # 302, not 301: a permanent redirect to a :443 that cannot answer is cached by
-      # browsers indefinitely, so flipping HTTPS_REDIRECT_MW later would not rescue
-      # anyone who already visited.
-      - "traefik.http.middlewares.cx-to-https.redirectscheme.permanent=false"
-      # HTTPS_REDIRECT_MW=cx-plain swaps the redirect for a harmless middleware, so a
-      # certificate that fails to issue degrades to plain HTTP instead of blacking out
-      # the site (an unreachable :443 behind a permanent redirect looks like a timeout).
-      - "traefik.http.middlewares.cx-plain.compress=true"
-      # What every USER APP's :80 router runs. Apps reference this fixed name rather
-      # than carrying the switch in their own labels, which are frozen when the
-      # container is created — so flipping HTTPS_REDIRECT_MW and recreating
-      # cx-control re-points every running app at once, no redeploys.
-      - "traefik.http.middlewares.cx-app-web.chain.middlewares=${HTTPS_REDIRECT_MW:-cx-to-https}"
-      # HTTPS_REDIRECT_MW=cx-tunnel (tunnel.sh). TLS ended at Cloudflare, and Traefik's
-      # plain :80 entrypoint overwrites the X-Forwarded-Proto: https that cloudflared
-      # passes on with "http" — so an app that forces HTTPS (Rails force_ssl, Django
-      # SECURE_SSL_REDIRECT, Express on req.secure) would redirect forever, and its
-      # secure cookies never stick. Every request here did arrive over HTTPS:
-      # Cloudflare's Always Use HTTPS redirects the rest before they reach the tunnel.
-      # No compress either: it holds a response's headers until its first byte, and
-      # Cloudflare cuts a response with no headers after ~100 s (live logs, SSE).
-      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Proto=https"
-      - "traefik.http.middlewares.cx-tunnel.headers.customrequestheaders.X-Forwarded-Port=443"
-      # Cloudflare would otherwise keep apps' .js/.css/images at its edge for hours,
-      # and nothing here can purge it after a redeploy or a heal. Browsers' own
-      # caching is untouched: this header is read by Cloudflare alone.
-      - "traefik.http.middlewares.cx-tunnel.headers.customresponseheaders.Cloudflare-CDN-Cache-Control=no-store"
       # HTTPS twin — same host rule, on :443, cert issued on first request (HTTP-01)
       - "traefik.http.routers.cx-control-secure.rule=Host(`app.${BASE_DOMAIN}`)"
       - "traefik.http.routers.cx-control-secure.entrypoints=websecure"

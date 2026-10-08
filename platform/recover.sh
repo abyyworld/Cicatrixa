@@ -160,7 +160,7 @@ DEST=/root/cicatrixa-platform
 # features: it runs under macOS's /bin/bash 3.2.
 # A box in tunnel mode (tunnel.sh) has no public address to pin to: visitors
 # reach it through Cloudflare, so the request below goes the way theirs do.
-remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"; t=$(grep -cE "^COMPOSE_PROFILES=([^#]*,)?tunnel([,[:space:]]|$)" '"$DEST"'/.env 2>/dev/null); echo "T=$t"'
+remote='d=$(grep -E "^BASE_DOMAIN=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2-); echo "D=$d"; i=$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 10 https://ifconfig.me 2>/dev/null); echo "I=$i"; t=$(grep -E "^COMPOSE_PROFILES=" '"$DEST"'/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d "\042\047" | tr ", " "\n\n" | grep -cx tunnel); echo "T=$t"'
 sshrc=0
 info="$(ssh -o ConnectTimeout=15 "$SERVER" "$remote" 2>&1)" || sshrc=$?
 if [ "$sshrc" -ne 0 ]; then

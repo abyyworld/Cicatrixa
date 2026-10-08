@@ -144,22 +144,32 @@ freezes every request in the process.
   Cloudflare cuts a response with none after ~100 s. Cloudflare's **Always Use HTTPS** does the
   redirect, and sign-in depends on it (cookies are Secure). Anything that may outlast ~100 s in a
   request goes in a background task; SSE streams send a comment at once and every 20 s.
-- `providers.docker.allowEmptyServices: true` in traefik.yml keeps cx-control's middlewares while
-  its healthcheck says starting/unhealthy. Without it every restart of cx-control dropped
-  `cx-app-web`, and every app's :80 router failed until it was healthy again.
   `verify-public.sh` checks the visitor's path in this mode — out through public DNS to Cloudflare
   and back through the tunnel — instead of waiting for a Let's Encrypt certificate.
 - Admin is never granted for typing an address. An `ADMIN_EMAILS` address becomes admin when its
   emailed code is entered; otherwise `docker exec cx-control python -m app.promote <email>`, which
-  needs a shell on the server. Without `ADMIN_EMAILS`, the first account on a fresh instance is the
-  admin — on a public instance, whoever signs up first; `tunnel.sh` refuses to run without it.
-  Codes die after 5 wrong guesses, and a code email goes out at most once a minute per account.
-- Sessions, like reset links, carry a tag of the password hash (`auth.make_session`), so a new
-  password ends every older session. Every token signed with the key has its own prefix
-  (`session:`, `pending:`, `reset:`, `gh:`) — none may be accepted as another.
-- A GitHub installation is bound to an account only with proof: the App asks for authorization on
-  install (`request_oauth_on_install`), and `connect_setup` checks the installation id against the
-  installer's own `/user/installations`. One already bound to another account is always refused.
+  needs a shell on the server, creates or takes over the account with a random password (ending
+  every session on it) and prints a one-time link to set one. Without `ADMIN_EMAILS`, the first
+  account on a fresh instance is the admin — on a public instance, whoever signs up first;
+  `tunnel.sh` refuses to run without it. A code dies after 5 wrong guesses; an account gets one
+  new code a minute (whether or not the email went out) and 25 wrong guesses an hour.
+- Sessions and pending cookies, like reset links, carry a tag of the password hash
+  (`auth.make_session`), so a new password ends every older one. Every token signed with the key
+  has its own prefix (`session:`, `pending:`, `reset:`, `gh:`) — none may be accepted as another.
+  A pending cookie never opens an already-verified account.
+- A GitHub installation is bound to an account only with proof. The `gh:` state must name the
+  signed-in account (no link from elsewhere binds anything), and GitHub's OAuth code (the App asks
+  for authorization on install; `/connect/github/authorize` for existing installations) must show
+  the installation is on the person's own account or an organisation they administer
+  (`gh.installations_user_controls` — seeing it is not enough: collaborators and members can, and
+  an installation token reaches all its repos). One bound to another account is always refused.
+- Customer code never gets the platform's `/data` volume: it holds cicatrixa.db (the signing key,
+  password hashes, the GitHub App key) and every tenant's checkout. The medic's test runs get a
+  COPY of their checkout (`engine.test_runner`, `put_archive`).
+- A deploy candidate starts with `traefik.enable=false`; only after it answers does a routed copy
+  start, and the old container retire. `cx-retry` hands a request that cannot connect (a routed
+  copy still starting) to another container. Known gap: requests sent to the OLD container while
+  it stops gracefully can wait a few seconds — Traefik only drops it once it has exited.
 - Password reset links are signed tokens bound to the current password hash (`auth.make_reset`):
   setting a new password kills every link issued for the old one, so no table tracks them. With
   email off or failing, `/admin` → "reset pw" makes a link to hand over manually, and `/admin`
@@ -174,8 +184,10 @@ freezes every request in the process.
   a rule into ONE certificate order; the apex's challenge lands on Vercel, fails, and fails the
   whole order — `app.` included. The control-plane routers match `app.<domain>` only
   (a test in `tests/test_engine_config.py` enforces it).
-- User-app routers use the fixed middleware `cx-app-web`, defined on cx-control as a chain over
-  `HTTPS_REDIRECT_MW`. Never bake the switch's value into app labels: labels freeze when a
+- User-app routers use the fixed middlewares `cx-app-web` (:80; a chain over `HTTPS_REDIRECT_MW`
+  and `cx-retry`) and `cx-app-tls` (:443). They are defined on **cx-traefik's** labels, never on
+  cx-control: Traefik drops a stopped or starting container's labels, and every app went down with
+  the control plane. Never bake the switch's value into app labels: labels freeze when a
   container is created, so the switch would stop reaching running apps.
 - `BASE_URL` must be `https://app.cicatrixa.com`, never the apex: it builds the GitHub App
   callback, referral invite links and the Stripe checkout return URL. Point those at the static

@@ -307,12 +307,20 @@ function updateBadge() {
 
 const log = document.getElementById('log');
 log.scrollTop = log.scrollHeight;
-const es = new EventSource('/projects/{{ project.id }}/events');
 // EventSource retries a dropped connection on its own, but gives up for good on an
-// error status (a proxy's 502/524). Reload then, so logs and replies keep coming.
-es.onerror = () => {
-  if (es.readyState === EventSource.CLOSED) setTimeout(() => location.reload(), 5000);
-};
+// error status (a proxy's 502/524, the server restarting). Open a new one then, with
+// the same listeners — no reload, so a half-typed chat message survives.
+const es = (() => {
+  const url = '/projects/{{ project.id }}/events', listeners = [];
+  let src;
+  const open = () => {
+    src = new EventSource(url);
+    listeners.forEach(([type, fn]) => src.addEventListener(type, fn));
+    src.onerror = () => { if (src.readyState === EventSource.CLOSED) setTimeout(open, 5000); };
+  };
+  open();
+  return { addEventListener(type, fn) { listeners.push([type, fn]); src.addEventListener(type, fn); } };
+})();
 es.addEventListener('log', e => {
   const d = JSON.parse(e.data);
   log.textContent += (log.textContent ? '\n' : '') + d.line;

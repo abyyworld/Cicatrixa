@@ -107,9 +107,12 @@ curl -sI https://app.cicatrixa.com/login   # 200 from cx-control, not the static
 
 Preferred: a **GitHub App** — admins create it in one click from `/admin` (manifest
 flow pre-fills everything; credentials are exchanged and stored automatically). Users
-then hit "Install & choose repos" and use GitHub's native repo picker; push webhooks
-flow with no per-repo setup. Fallback: paste a PAT (fine-grained `Contents: read` +
-`Metadata`, or classic `repo`).
+then hit "Install & choose repos", use GitHub's native repo picker, and press
+**Authorize** — that authorization is how the platform checks the installation is on
+their own account or an organisation they administer (an organisation's installation
+is connected by one of its owners). "Already installed? Connect it" does the same for
+an installation that exists. Push webhooks flow with no per-repo setup. Fallback: paste
+a PAT (fine-grained `Contents: read` + `Metadata`, or classic `repo`).
 
 ## Tests
 

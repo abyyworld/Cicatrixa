@@ -12,12 +12,6 @@ providers:
   docker:
     exposedByDefault: false
     network: cxnet
-    # Keep a container's routers and middlewares while its healthcheck says
-    # starting/unhealthy (its own service answers 503 meanwhile). cx-control has a
-    # healthcheck and defines cx-app-web, the middleware every app's :80 router uses:
-    # without this, each cx-control restart made Traefik drop that middleware and
-    # 404 every customer app on :80 — which in tunnel mode is all of their traffic.
-    allowEmptyServices: true
   file:
     directory: /dynamic
     watch: true

@@ -16,7 +16,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # resolves to Cloudflare by design, and there is no server address for it to
 # match. Everything below would call that broken. verify-public.sh checks this
 # setup the way a visitor reaches it.
-if [ -f "$HERE/.env" ] && grep -E '^COMPOSE_PROFILES=' "$HERE/.env" | tail -1 | cut -d= -f2- \
+# Only when no other target was named: DOMAIN= or SERVER= asks about that one.
+if [ -z "${DOMAIN:-}${SERVER:-}" ] && [ -f "$HERE/.env" ] \
+   && grep -E '^COMPOSE_PROFILES=' "$HERE/.env" | tail -1 | cut -d= -f2- \
      | tr -d "\"'" | tr ', ' '\n\n' | grep -qx tunnel; then
   echo "tunnel mode (.env): checking the way a visitor arrives, through Cloudflare"
   exec "$HERE/verify-public.sh"

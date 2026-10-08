@@ -33,10 +33,11 @@ cd "$HERE"
 case "${1:-start}" in
   stop)
     docker compose down
-    # Customer apps and databases are not part of the compose project. Stop them
-    # too — offline means their code stops running here — but keep them: the
-    # watchdog starts them again after the next ./tunnel.sh.
-    ids="$(docker ps -q --filter label=cx.service; docker ps -q --filter label=cx.database)"
+    # Customer apps, databases and test runs are not part of the compose project.
+    # Stop them too — offline means their code stops running here — but keep the
+    # apps and databases: the watchdog starts them again after the next ./tunnel.sh.
+    ids="$(docker ps -q --filter label=cx.service; docker ps -q --filter label=cx.database
+           docker ps -q --filter label=cx.test)"
     [ -z "$ids" ] || docker stop $ids >/dev/null
     exit 0 ;;
   start) ;;
@@ -62,7 +63,10 @@ fi
 
 touch .env
 chmod 600 .env
-current() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- || true; }
+# A value from .env, with one layer of quotes taken off the way compose reads it.
+current() {
+  grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/" || true
+}
 # Replace or add KEY=VALUE in .env, via a temp file so values holding / or &
 # (URLs, keys) need no escaping.
 upsert() {
@@ -90,7 +94,10 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
+PASSED_ADMIN_EMAILS="${ADMIN_EMAILS:-}"
 ADMIN_EMAILS="${ADMIN_EMAILS:-$(current ADMIN_EMAILS)}"
+ADMIN_EMAILS="$(printf '%s' "$ADMIN_EMAILS" | tr -d ' \t\r')"   # as the app reads it
+case "$ADMIN_EMAILS" in *@*) ;; *) ADMIN_EMAILS="" ;; esac
 if [ -z "$ADMIN_EMAILS" ]; then
   echo "set ADMIN_EMAILS — the address you will sign up with yourself. Without it the" >&2
   echo "first account made on the live site, by anyone, would be the admin." >&2
@@ -110,7 +117,9 @@ upsert COMPOSE_PROFILES tunnel
 # "Always Use HTTPS" does that job at the edge instead (verify-public.sh checks it),
 # and cx-tunnel tells apps the request was HTTPS (docker-compose.yml).
 upsert HTTPS_REDIRECT_MW cx-tunnel
-for v in OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY MAIL_FROM \
+upsert ADMIN_EMAILS "$ADMIN_EMAILS"
+[ -z "$PASSED_ADMIN_EMAILS" ] || echo "  set ADMIN_EMAILS from what you passed"
+for v in OPENAI_API_KEY AI_MODEL RESEND_API_KEY MAIL_FROM \
          STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
   if [ -n "${!v:-}" ]; then
     upsert "$v" "${!v}"
@@ -172,14 +181,13 @@ rc=0
 echo
 case "$rc" in
   0) echo "  Cicatrixa is live: https://app.$BASE_DOMAIN"
-     echo "  Sign up at https://app.$BASE_DOMAIN/signup as $OWNER."
+     # A shell on this machine is the proof of who the admin is: anyone on the
+     # web can type your address. promote makes (or takes back) the account and
+     # prints a one-time link to choose its password — no signing up first.
+     echo "  Make your admin account, on this machine:"
+     echo "    docker exec cx-control python -m app.promote $OWNER"
      if [ -n "$(current RESEND_API_KEY)" ]; then
-       echo "  Entering the code emailed to you makes you the admin."
-     else
-       # Email is off, so signing up proves nothing about who you are — anyone can
-       # type your address. Admin comes from a shell on this machine instead.
-       echo "  Then, on this machine, make yourself the admin:"
-       echo "    docker exec cx-control python -m app.promote $OWNER"
+       echo "  (Or sign up as $OWNER: entering the emailed code makes it the admin.)"
      fi
      echo "  Keep this machine on and awake: it is the server." ;;
   2) echo "  The stack is running here. Finish what is listed above in the Cloudflare"

@@ -1,25 +1,40 @@
-"""Make an existing account an admin, from the server itself:
+"""Make an admin account, from the server itself:
 
     docker exec cx-control python -m app.promote you@example.com
 
 Signing up proves nothing about who you are when email is off: anyone can type the
-owner's address. Running this needs a shell on the machine, which is the proof the
-web cannot give. With email on, an address in ADMIN_EMAILS becomes admin by itself
-once its emailed code is entered; this is for everything else.
+owner's address, and may have done so first. Running this needs a shell on the
+machine, which is the proof the web cannot give — so it does not trust the
+account's current password either. It creates the account if there is none, or
+takes it over if there is: a new random password ends every session on it (the
+squatter's included), and it prints a one-time link to choose your own.
+With email on, an ADMIN_EMAILS address can instead become admin by entering its
+emailed code at signup.
 """
 import os
+import secrets
 import sys
+from urllib.parse import urlencode
 
-from . import db
+from . import auth, db
 
 
-def promote(email: str) -> bool:
+def promote(email: str) -> str:
+    """Make `email` an admin with a password nobody knows yet. Returns a link to
+    set one."""
     email = email.strip().lower()
+    pw_hash = auth.hash_password(secrets.token_urlsafe(32))
     row = db.one("SELECT id FROM users WHERE email=?", (email,))
-    if not row:
-        return False
-    db.q("UPDATE users SET is_admin=1 WHERE id=?", (row["id"],))
-    return True
+    if row:
+        db.q("UPDATE users SET pw_hash=?, is_admin=1, email_verified=1, verify_code=NULL, "
+             "verify_expires=NULL WHERE id=?", (pw_hash, row["id"]))
+        uid = row["id"]
+    else:
+        uid = db.q("INSERT INTO users(email,pw_hash,is_admin,email_verified,created_at) "
+                   "VALUES(?,?,1,1,?)", (email, pw_hash, db.now())).lastrowid
+    user = db.one("SELECT * FROM users WHERE id=?", (uid,))
+    base = os.environ.get("BASE_URL") or f"http://{os.environ.get('BASE_DOMAIN', 'localhost')}"
+    return f"{base}/reset-password?" + urlencode({"token": auth.make_reset(user)})
 
 
 def main(argv: list[str]) -> int:
@@ -31,11 +46,11 @@ def main(argv: list[str]) -> int:
     if not os.path.exists(db.DB_PATH):
         print(f"no database at {db.DB_PATH} — run this inside cx-control", file=sys.stderr)
         return 1
-    if not promote(argv[1]):
-        print(f"no account for {argv[1]} — sign up first, then run this again",
-              file=sys.stderr)
-        return 1
-    print(f"{argv[1].strip().lower()} is now an admin.")
+    link = promote(argv[1])
+    email = argv[1].strip().lower()
+    print(f"{email} is an admin. Open this link within an hour to choose its password")
+    print("(it works once; any session already open on this account has ended):")
+    print(f"  {link}")
     return 0
 
 

@@ -87,17 +87,20 @@ def session_user_id(token: str | None) -> int | None:
 
 
 def make_pending(user_id: int) -> str:
-    return sign_state(f"pending:{user_id}", ttl=PENDING_TTL)
+    """The cookie that holds someone between signup and their code. Tied to the
+    password like a session, so a reset by the address's real owner ends it."""
+    user = db.one("SELECT pw_hash FROM users WHERE id=?", (user_id,))
+    tag = _password_tag(user["pw_hash"] if user else "")
+    return sign_state(f"pending:{user_id}:{tag}", ttl=PENDING_TTL)
+
+
+def pending_user(token: str | None):
+    return _tagged_user(token, "pending")
 
 
 def pending_user_id(token: str | None) -> int | None:
-    data = verify_state(token or "")
-    if not data or not data.startswith("pending:"):
-        return None
-    try:
-        return int(data.split(":", 1)[1])
-    except ValueError:
-        return None
+    user = pending_user(token)
+    return user["id"] if user else None
 
 
 def _password_tag(pw_hash: str) -> str:

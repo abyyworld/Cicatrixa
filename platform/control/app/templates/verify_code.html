@@ -15,8 +15,10 @@
   {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   {% if wait %}<div class="card" style="margin-bottom:14px;padding:10px 16px">
-    <span class="mono muted" style="font-size:13px">A code went out less than a minute ago and
-    still works — give it a moment, then check spam.</span></div>{% endif %}
+    <span class="mono muted" style="font-size:13px">A new code can be sent once a minute — the
+    last one still works for 10 minutes, so check spam, then try again shortly.</span></div>{% endif %}
+  {% if blocked %}<div class="err">Too many wrong codes for this account in the last hour.
+    Try again later, or write to <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>.</div>{% endif %}
   {% if resent %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:10px 16px">
     <span class="mono" style="color:var(--healed);font-size:13px">✔ new code sent.</span></div>{% endif %}
   <form method="post" action="/verify-code" class="card">

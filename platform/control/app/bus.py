@@ -33,7 +33,12 @@ def _fanout(channel: str, msg: dict):
 HEARTBEAT = 20
 
 
-async def subscribe(channel: str):
+async def subscribe(channel: str, alive=None):
+    """Events on a channel as SSE text. `alive` (async, returns bool) is asked at
+    every heartbeat: the stream ends when it says no. The server cannot rely on
+    noticing a departed client by itself — with this uvicorn, writing to one is a
+    silent no-op — so without it every closed tab kept a subscriber, and its
+    heartbeat, until the process restarted (and held up every shutdown)."""
     queue: asyncio.Queue = asyncio.Queue()
     _subscribers[channel].add(queue)
     try:
@@ -44,6 +49,8 @@ async def subscribe(channel: str):
             try:
                 msg = await asyncio.wait_for(queue.get(), HEARTBEAT)
             except asyncio.TimeoutError:
+                if alive is not None and not await alive():
+                    return
                 yield ": keep-alive\n\n"
                 continue
             yield f"event: {msg['event']}\ndata: {json.dumps(msg['data'])}\n\n"

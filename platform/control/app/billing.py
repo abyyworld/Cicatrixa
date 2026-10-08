@@ -20,7 +20,9 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 API = "https://api.stripe.com/v1"
 PRICE_CENTS = 299
-PAID_CYCLE_DAYS = 32  # 30-day cycle + grace so renewals never flap
+CYCLE_DAYS = 30
+GRACE_DAYS = 2        # so a renewal that lands a little late never flaps the account
+PAID_CYCLE_DAYS = CYCLE_DAYS + GRACE_DAYS
 
 
 def available() -> bool:
@@ -82,8 +84,12 @@ def _first_sight(invoice_id: str | None) -> bool:
 
 
 def _extend_paid(user_id: int):
-    base = max(db.one("SELECT paid_until FROM users WHERE id=?",
-                      (user_id,))["paid_until"] or 0, db.now())
+    # Each payment buys one cycle, from where the last one really ended (its grace
+    # taken back off). Extending from paid_until itself carried every grace
+    # period forward: two free days a month, piling up.
+    paid_until = db.one("SELECT paid_until FROM users WHERE id=?",
+                        (user_id,))["paid_until"] or 0
+    base = max(paid_until - GRACE_DAYS * 86400, db.now())
     db.q("UPDATE users SET paid_until=? WHERE id=?",
          (base + PAID_CYCLE_DAYS * 86400, user_id))
     referrals.record_conversion(user_id)

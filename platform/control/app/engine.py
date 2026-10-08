@@ -9,8 +9,9 @@ import asyncio
 import os
 import re
 import shutil
-import socket
 import subprocess
+import tarfile
+import tempfile
 import time
 
 import docker
@@ -23,12 +24,6 @@ BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
 HTTPS_ENABLED = BASE_URL.startswith("https://")
 NETWORK = os.environ.get("CX_NETWORK", "cxnet")
 WORK_ROOT = os.environ.get("WORK_ROOT", "/data/work")
-# Named volume backing /data — mounted into ephemeral test containers. Compose
-# prefixes volume names with the project (platform_cx-data, cicatrixa-platform_cx-data),
-# so unless CX_DATA_VOLUME says otherwise, data_volume() asks Docker what is
-# actually mounted at /data here. Mounting the bare name created a separate, empty
-# volume, and every test run saw no code.
-DATA_VOLUME = os.environ.get("CX_DATA_VOLUME", "")
 MAX_ATTEMPTS = 3
 COMMON_PORTS = [3000, 8000, 8080, 5000, 80, 4000, 8501, 5173, 9000, 3001]
 RAM_PER_CONTAINER_MB = int(os.environ.get("RAM_PER_CONTAINER_MB", "768"))
@@ -44,6 +39,9 @@ BUILD_CONCURRENCY = max(1, int(os.environ.get("BUILD_CONCURRENCY", "2")))
 # app container is created, so baking the switch's current value in here would
 # leave every running app on the old behaviour after the switch flips.
 APP_WEB_MW = "cx-app-web"
+# The same idea for an app's :443 routers (VPS mode): a fixed name, so what it
+# does can change without redeploying anyone. Today it is cx-retry.
+APP_TLS_MW = "cx-app-tls"
 API_NAME_RE = re.compile(r"(api|backend|server|graphql|rest)", re.I)
 
 
@@ -64,19 +62,6 @@ def dock() -> docker.DockerClient:
     if _docker is None:
         _docker = docker.from_env()
     return _docker
-
-
-def data_volume() -> str:
-    global DATA_VOLUME
-    if not DATA_VOLUME:
-        try:
-            me = dock().containers.get(socket.gethostname())
-            DATA_VOLUME = next(m["Name"] for m in me.attrs.get("Mounts", [])
-                               if m.get("Destination") == "/data"
-                               and m.get("Type") == "volume")
-        except Exception:
-            return "cx-data"   # not in a container (tests, local run): nothing better known
-    return DATA_VOLUME
 
 
 def service_url(slug: str) -> str:
@@ -355,24 +340,31 @@ def test_runner(image: str, workdir: str, timeout: int = 600):
     (exit_code, output) — what verify.collect() needs to execute a customer's
     suite.
 
-    The clone lives under /data, which is the cx-data named volume, so the
-    volume is mounted by name: a bind mount of the control plane's own path
-    would be resolved by the host daemon and point at nothing.
+    The clone is COPIED in, at the same path, before the container starts. It
+    lives in the platform's /data volume, and that volume must never be mounted
+    here: this is the customer's own code, and /data also holds cicatrixa.db —
+    the key that signs every session, everyone's password hashes, the GitHub
+    App's private key — and every other tenant's checkout. (A bind mount of
+    the control plane's path would not work either: the host daemon resolves it.)
 
     entrypoint="" because the image is the customer's app — its ENTRYPOINT would
     start their server instead of pytest. The same RAM/CPU caps as a user
     container apply, so a runaway suite cannot take the host down.
     """
     def run(command: str) -> tuple[int, str]:
-        container = dock().containers.run(
+        container = dock().containers.create(
             image, entrypoint="", command=["sh", "-lc", command],
-            volumes={data_volume(): {"bind": "/data", "mode": "rw"}},
-            working_dir=workdir,
+            working_dir=workdir, labels={"cx.test": "1"},
             mem_limit=f"{RAM_PER_CONTAINER_MB}m",
             nano_cpus=int(CPU_PER_CONTAINER * 1e9),
-            detach=True,
         )
         try:
+            with tempfile.TemporaryFile() as archive:
+                with tarfile.open(fileobj=archive, mode="w") as tar:
+                    tar.add(workdir, arcname=workdir.lstrip("/"))
+                archive.seek(0)
+                container.put_archive("/", archive)
+            container.start()
             result = container.wait(timeout=timeout)
             return (result.get("StatusCode", 1),
                     container.logs().decode("utf-8", errors="replace"))
@@ -403,6 +395,7 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
         labels[f"traefik.http.routers.cx-{slug}-secure.entrypoints"] = "websecure"
         labels[f"traefik.http.routers.cx-{slug}-secure.service"] = f"cx-{slug}"
         labels[f"traefik.http.routers.cx-{slug}-secure.tls.certresolver"] = "le"
+        labels[f"traefik.http.routers.cx-{slug}-secure.middlewares"] = APP_TLS_MW
     # api bridge: serve this service's API prefixes on the sibling frontends' domains,
     # so frontends call a relative /api/... — same origin, no CORS, no baked URLs
     prefixes = (plan or {}).get("api_prefixes") or []
@@ -433,8 +426,8 @@ def _labels(service, port: int, plan: dict | None = None) -> dict:
                 labels[f"traefik.http.routers.{sec}.entrypoints"] = "websecure"
                 labels[f"traefik.http.routers.{sec}.service"] = f"cx-{slug}"
                 labels[f"traefik.http.routers.{sec}.tls.certresolver"] = "le"
-                if strip_mw:
-                    labels[f"traefik.http.routers.{sec}.middlewares"] = strip_mw
+                labels[f"traefik.http.routers.{sec}.middlewares"] = \
+                    ",".join([APP_TLS_MW] + ([strip_mw] if strip_mw else []))
     return labels
 
 
@@ -460,14 +453,21 @@ def _sibling_env(service) -> dict:
     return env
 
 
-def _run_container(service, image: str, port: int, name: str, plan: dict | None = None):
+def _run_container(service, image: str, port: int, name: str, plan: dict | None = None,
+                   routed: bool = True):
     from . import dbprovision  # late import: dbprovision imports this module
     env = {"PORT": str(port), "HOST": "0.0.0.0",
            "PUBLIC_URL": service_url(service["slug"]), **_sibling_env(service),
            **dbprovision.sibling_env(service["project_id"])}
+    labels = _labels(service, port, plan)
+    if not routed:
+        # A candidate under test takes no traffic and answers to no sibling:
+        # Traefik ignores it, and only its own name reaches it.
+        labels = {k: v for k, v in labels.items() if k.startswith("cx.")}
+        labels["traefik.enable"] = "false"
     client = dock()
     container = client.containers.create(
-        image, name=name, labels=_labels(service, port, plan),
+        image, name=name, labels=labels,
         mem_limit=f"{RAM_PER_CONTAINER_MB}m", nano_cpus=int(CPU_PER_CONTAINER * 1e9),
         restart_policy={"Name": "unless-stopped"}, environment=env,
     )
@@ -476,18 +476,26 @@ def _run_container(service, image: str, port: int, name: str, plan: dict | None 
         client.networks.get("bridge").disconnect(container)
     except Exception:
         pass
-    net.connect(container, aliases=[service["slug"]])
+    net.connect(container, aliases=[service["slug"]] if routed else [])
     container.start()
     return container
 
 
 def _start_and_probe(service, image: str, plan: dict, log):
-    """Start a candidate container, find the real listening port, fix routing if needed."""
+    """Start a candidate with no traffic, find the port it really listens on, and
+    only then start the copy that takes traffic.
+
+    The candidate used to carry the live router's labels from its first second,
+    so Traefik put it in the load balancer beside the old container at once:
+    a push that crashed at boot served errors to about half of the app's
+    visitors for each probe attempt, minutes in all. The routed copy still joins
+    while it starts, but cx-retry (docker-compose.yml) sends a request it cannot
+    connect to on to the old container."""
     slug = service["slug"]
     planned = int(plan.get("port") or 8000)
     name = f"cx-{slug}-{int(time.time())}"
-    log(f"🚀 starting container {name} (expecting port {planned})")
-    container = _run_container(service, image, planned, name, plan)
+    log(f"🚀 starting candidate {name} (expecting port {planned}) — no traffic yet")
+    container = _run_container(service, image, planned, name, plan, routed=False)
 
     health = plan.get("health_path") or "/"
     candidates = [planned] + [p for p in _exposed_ports(image) if p != planned] \
@@ -502,14 +510,15 @@ def _start_and_probe(service, image: str, plan: dict, log):
         _safe_rm(container)
         return None, None, run_log
     if found != planned:
-        log(f"  app actually listens on {found} — re-routing")
+        log(f"  app actually listens on {found}, not {planned}")
+    log(f"  candidate works — starting the copy that takes traffic, on port {found}")
+    _safe_rm(container)
+    name = f"cx-{slug}-{int(time.time())}"
+    container = _run_container(service, image, found, name, plan)
+    if _probe(name, [found], health, log, timeout=45) is None:
+        run_log = container.logs(tail=300).decode(errors="replace")
         _safe_rm(container)
-        name = f"cx-{slug}-{int(time.time())}"
-        container = _run_container(service, image, found, name, plan)
-        if _probe(name, [found], health, log, timeout=45) is None:
-            run_log = container.logs(tail=300).decode(errors="replace")
-            _safe_rm(container)
-            return None, None, run_log
+        return None, None, run_log
     return found, name, run_log
 
 
