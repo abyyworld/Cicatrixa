@@ -22,6 +22,14 @@ Owner: kenny09077@gmail.com. Cloudflare account: Annolieberto@gmail.com.
 | serves | `cicatrixa.com`, `www.` | `app.cicatrixa.com`, `*.cicatrixa.com` user apps, `demo.` |
 | deploy | git push → Vercel | free, any machine: `platform/tunnel.sh` (Cloudflare Tunnel); new box: paste `platform/first-boot.sh`'s stub into cloud-init; by hand: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
 
+**Accounts (added 2026-10-18), on Vercel beside the site:** sign-up, email confirmation, login and
+password reset for `app.cicatrixa.com`, with no server of ours. `api/auth.js` (one Vercel function,
+Better Auth) + `accounts/` (config, Resend emails, schema) + `site/{signup,login,forgot-password,
+reset-password,dashboard}.html`. Users live in the Turso database `cicatrixa-prod` (org
+`akbarjuraev`; see the free-database-servers repo). Setup and env vars: `accounts/README.md`.
+Until the platform runs on a Docker host, the dashboard says deploying opens soon; when it does,
+the platform takes `app.` over and imports these users (README, last section).
+
 There is a **third**, older thing: the repo root (`docker-compose.yml`, `app/`, `healer/`,
 `traefik/`) is the original **self-heal demo** — a seeded-bug FastAPI order service plus the
 five healing agents. It is the YC demo, not the product. On the server it lives at

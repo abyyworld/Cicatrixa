@@ -1,4 +1,18 @@
 {
   "outputDirectory": "site",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "app.cicatrixa.com" }],
+      "destination": "/dashboard",
+      "permanent": false
+    }
+  ],
+  "rewrites": [
+    { "source": "/api/auth/:path*", "destination": "/api/auth?__auth_path=:path*" }
+  ],
+  "functions": {
+    "api/auth.js": { "maxDuration": 15 }
+  }
 }

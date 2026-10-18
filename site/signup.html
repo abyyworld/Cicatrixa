@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign up — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/accounts.js" defer></script>
+</head>
+<body data-page="signup">
+<header class="masthead"><div class="wrap nav">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <span class="spacer"></span>
+  <a class="lnk" href="/login">Log in</a>
+  <a class="btn sm" href="/signup">Sign up</a>
+</div></header>
+<main><div class="wrap">
+<div class="narrow">
+  <div class="lbl-caps">14-day free trial · no card required</div>
+  <h1>Create your <em>account</em></h1>
+  <p class="sub">Every account starts with 14 days free — full platform, AI medic included.</p>
+  <div id="error" class="err" hidden></div>
+  <form id="form" class="card" autocomplete="on">
+    <label for="email">email</label>
+    <input id="email" type="email" name="email" required autofocus autocomplete="email">
+    <label for="password">password</label>
+    <input id="password" type="password" name="password" minlength="8" maxlength="128" required autocomplete="new-password">
+    <button class="btn full" type="submit">Create account →</button>
+  </form>
+  <div id="sent" class="card" hidden>
+    <h1 style="font-size:24px">Check your <em>inbox</em></h1>
+    <p class="muted small">We sent a link to <b id="sent-to" style="color:var(--ink)"></b>. Open it to
+      confirm your email and you're in. It works for an hour.</p>
+    <p class="muted small">Nothing after a few minutes? Check spam, or <a href="/login">log in</a> —
+      that sends a new link.</p>
+  </div>
+  <p class="muted small" style="margin-top:16px">Already have an account? <a href="/login">Log in</a></p>
+</div>
+</div></main>
+</body>
+</html>

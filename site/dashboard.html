@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/accounts.js" defer></script>
+</head>
+<body data-page="dashboard">
+<header class="masthead"><div class="wrap nav">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <span class="spacer"></span>
+  <button id="signout" class="btn ghost sm" type="button">Log out</button>
+</div></header>
+<main><div class="wrap">
+<div id="account" hidden>
+  <div id="notice" class="ok" hidden></div>
+  <div class="lbl-caps">your account</div>
+  <h1>You're <em>in</em></h1>
+  <p class="sub">Signed in as <b id="email" style="color:var(--ink)"></b>.</p>
+  <div class="card">
+    <p style="margin-top:0">Your account is ready. Deploying projects opens soon — we'll email
+      <b id="notify-email"></b> the moment your workspace is live.</p>
+    <p class="muted small" style="margin-bottom:0">Questions? <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a></p>
+  </div>
+</div>
+</div></main>
+</body>
+</html>
