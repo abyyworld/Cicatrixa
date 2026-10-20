@@ -4,9 +4,21 @@
 <div style="max-width:400px;margin:60px auto">
   <div class="lbl-caps">check your inbox</div>
   <h1>Enter your <em>code</em></h1>
+  {% if unsent %}
+  <p class="sub">A 6-digit code goes to <b style="color:var(--ink)">{{ pending_email }}</b>.</p>
+  <div class="err">We couldn't send the email just now. Check the address is right, then
+    press <b>Resend code</b>. Still nothing? Write to
+    <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>.</div>
+  {% else %}
   <p class="sub">We sent a 6-digit code to <b style="color:var(--ink)">{{ pending_email }}</b>.
     It expires in 10 minutes.</p>
+  {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if wait %}<div class="card" style="margin-bottom:14px;padding:10px 16px">
+    <span class="mono muted" style="font-size:13px">A new code can be sent once a minute — the
+    last one still works for 10 minutes, so check spam, then try again shortly.</span></div>{% endif %}
+  {% if blocked %}<div class="err">Too many wrong codes for this account in the last hour.
+    Try again later, or write to <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a>.</div>{% endif %}
   {% if resent %}<div class="card" style="border-color:var(--healed-dim);margin-bottom:14px;padding:10px 16px">
     <span class="mono" style="color:var(--healed);font-size:13px">✔ new code sent.</span></div>{% endif %}
   <form method="post" action="/verify-code" class="card">

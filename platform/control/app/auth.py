@@ -14,6 +14,7 @@ COOKIE_NAME = "cx_session"
 PENDING_COOKIE_NAME = "cx_pending"
 PENDING_TTL = 15 * 60
 CODE_TTL = 10 * 60
+RESET_TTL = 60 * 60
 
 
 def generate_code() -> str:
@@ -65,31 +66,81 @@ def _verify(token: str) -> str | None:
 
 
 def make_session(user_id: int) -> str:
-    return _sign(f"{user_id}:{int(time.time()) + SESSION_TTL}")
+    """Tied to the password it was issued under, like a reset link: setting a new
+    password ends every session from before it, so a reset evicts whoever else was
+    signed in. The prefix keeps every other token signed with this key — pending,
+    reset, GitHub state — from ever reading as a session."""
+    user = db.one("SELECT pw_hash FROM users WHERE id=?", (user_id,))
+    tag = _password_tag(user["pw_hash"] if user else "")
+    return sign_state(f"session:{user_id}:{tag}", ttl=SESSION_TTL)
+
+
+def session_user(token: str | None):
+    """The signed-in user, or None if the cookie is forged, expired, or from
+    before the account's current password."""
+    return _tagged_user(token, "session")
 
 
 def session_user_id(token: str | None) -> int | None:
-    if not token:
-        return None
-    payload = _verify(token)
-    if not payload:
-        return None
-    try:
-        uid, exp = payload.split(":")
-        if int(exp) < time.time():
-            return None
-        return int(uid)
-    except ValueError:
-        return None
+    user = session_user(token)
+    return user["id"] if user else None
 
 
 def make_pending(user_id: int) -> str:
-    return sign_state(f"pending:{user_id}", ttl=PENDING_TTL)
+    """The cookie that holds someone between signup and their code. Tied to the
+    password like a session, so a reset by the address's real owner ends it."""
+    user = db.one("SELECT pw_hash FROM users WHERE id=?", (user_id,))
+    tag = _password_tag(user["pw_hash"] if user else "")
+    return sign_state(f"pending:{user_id}:{tag}", ttl=PENDING_TTL)
+
+
+def pending_user(token: str | None):
+    return _tagged_user(token, "pending")
 
 
 def pending_user_id(token: str | None) -> int | None:
+    user = pending_user(token)
+    return user["id"] if user else None
+
+
+def _password_tag(pw_hash: str) -> str:
+    """Binds a reset link to the password it replaces. Setting a new password
+    changes the tag, so every link issued for the old one stops working: a link
+    is single-use without a table to track it."""
+    return hmac.new(_secret(), (pw_hash or "").encode(), hashlib.sha256).hexdigest()[:16]
+
+
+def make_reset(user) -> str:
+    return sign_state(f"reset:{user['id']}:{_password_tag(user['pw_hash'])}", ttl=RESET_TTL)
+
+
+def reset_user(token: str | None):
+    """The user a reset link is for, or None if it is forged, expired or used."""
+    return _tagged_user(token, "reset")
+
+
+def _tagged_user(token: str | None, kind: str):
     data = verify_state(token or "")
-    if not data or not data.startswith("pending:"):
+    if not data or not data.startswith(kind + ":"):
+        return None
+    try:
+        _, uid, tag = data.split(":")
+        user = db.one("SELECT * FROM users WHERE id=?", (int(uid),))
+    except ValueError:
+        return None
+    if not user or not hmac.compare_digest(tag, _password_tag(user["pw_hash"])):
+        return None
+    return user
+
+
+def make_gh_state(user_id: int) -> str:
+    """The state sent through GitHub's install flow, naming who started it."""
+    return sign_state(f"gh:{user_id}")
+
+
+def gh_state_user_id(token: str | None) -> int | None:
+    data = verify_state(token or "")
+    if not data or not data.startswith("gh:"):
         return None
     try:
         return int(data.split(":", 1)[1])

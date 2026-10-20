@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from urllib.parse import urlencode
 
 import httpx
 import jwt
@@ -69,15 +70,20 @@ def build_manifest(base_url: str) -> dict:
         "hook_attributes": {"url": f"{base_url}/api/webhooks/github", "active": True},
         "redirect_url": f"{base_url}/admin/github/callback",
         "callback_urls": [f"{base_url}/connect/github/callback"],
-        "setup_url": f"{base_url}/connect/github/setup",
-        "setup_on_update": False,
+        # After installing, GitHub asks the installer to authorize the App and sends
+        # them to the callback with an OAuth code. That code is the only proof of
+        # whose installation it is (main.connect_setup); without it any account
+        # could claim any installation id. GitHub allows no setup_url alongside it.
+        "request_oauth_on_install": True,
         "public": True,
         # pull_requests:write is what PR mode needs. GitHub keeps EXISTING
         # installations on the permissions they already accepted, so adding it
         # here changes nothing for current users until they choose to update —
         # which is exactly the rollout we want.
+        # members:read lets connect_setup ask GitHub whether the person connecting
+        # an organisation's installation administers that organisation.
         "default_permissions": {"contents": "write", "metadata": "read",
-                                "pull_requests": "write"},
+                                "pull_requests": "write", "members": "read"},
         "default_events": ["push", "pull_request"],
     }
 
@@ -95,6 +101,64 @@ def exchange_manifest_code(code: str) -> dict:
     db.set_setting("gh_app_client_id", data.get("client_id", ""))
     db.set_setting("gh_app_client_secret", data.get("client_secret", ""))
     return data
+
+
+def authorize_url(state: str, base_url: str) -> str | None:
+    """GitHub's OAuth page for this App, for someone whose installation already
+    exists (reconnecting after a disconnect, or installed from GitHub directly):
+    it comes back to the same callback with a code and no installation_id."""
+    client_id = db.setting("gh_app_client_id")
+    if not client_id:
+        return None
+    return "https://github.com/login/oauth/authorize?" + urlencode({
+        "client_id": client_id, "state": state,
+        "redirect_uri": f"{base_url}/connect/github/callback"})
+
+
+def installations_user_controls(code: str) -> dict[int, dict] | None:
+    """Trade the OAuth code GitHub sends after an install (or an authorize) for the
+    person's own token, and return this App's installations on an account they
+    control: their own, or an organisation they administer. None if the code
+    cannot be used.
+
+    Seeing an installation is not enough. /user/installations lists every one the
+    person can read anything through — a single repo as a collaborator, or plain
+    organisation membership — and an installation token reaches ALL of its repos."""
+    client_id = db.setting("gh_app_client_id")
+    secret = db.setting("gh_app_client_secret")
+    if not (code and client_id and secret):
+        return None
+    try:
+        r = httpx.post("https://github.com/login/oauth/access_token",
+                       data={"client_id": client_id, "client_secret": secret,
+                             "code": code},
+                       headers={"Accept": "application/json"}, timeout=20)
+        token = r.json().get("access_token") if r.status_code == 200 else None
+        if not token:
+            return None
+        me = _get(token, "/user")
+        controlled: dict[int, dict] = {}
+        page = 1
+        while True:
+            found = _get(token, "/user/installations",
+                         {"per_page": 100, "page": page}).get("installations", [])
+            for inst in found:
+                account = inst.get("account") or {}
+                if account.get("type") == "User":
+                    if account.get("id") == me.get("id"):
+                        controlled[inst["id"]] = inst
+                elif account.get("type") == "Organization" and account.get("login"):
+                    try:
+                        m = _get(token, f"/user/memberships/orgs/{account['login']}")
+                    except Exception:
+                        continue          # no answer is no proof
+                    if m.get("role") == "admin" and m.get("state") == "active":
+                        controlled[inst["id"]] = inst
+            if len(found) < 100:
+                return controlled
+            page += 1
+    except Exception:
+        return None
 
 
 def _app_jwt() -> str:

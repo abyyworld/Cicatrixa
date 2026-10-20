@@ -20,7 +20,9 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 API = "https://api.stripe.com/v1"
 PRICE_CENTS = 299
-PAID_CYCLE_DAYS = 32  # 30-day cycle + grace so renewals never flap
+CYCLE_DAYS = 30
+GRACE_DAYS = 2        # so a renewal that lands a little late never flaps the account
+PAID_CYCLE_DAYS = CYCLE_DAYS + GRACE_DAYS
 
 
 def available() -> bool:
@@ -69,9 +71,25 @@ def verify_signature(payload: bytes, sig_header: str) -> bool:
     return hmac.compare_digest(expected, sig)
 
 
+def _first_sight(invoice_id: str | None) -> bool:
+    """True the first time an invoice is seen. A subscription's first payment
+    arrives twice — as checkout.session.completed and as invoice.paid, in either
+    order — and Stripe retries deliveries, so without this one payment could add
+    two or three months. The insert is atomic, so two deliveries at once still
+    count once."""
+    if not invoice_id:
+        return True
+    return db.q("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
+                (f"stripe_invoice:{invoice_id}", str(int(time.time())))).rowcount == 1
+
+
 def _extend_paid(user_id: int):
-    base = max(db.one("SELECT paid_until FROM users WHERE id=?",
-                      (user_id,))["paid_until"] or 0, db.now())
+    # Each payment buys one cycle, from where the last one really ended (its grace
+    # taken back off). Extending from paid_until itself carried every grace
+    # period forward: two free days a month, piling up.
+    paid_until = db.one("SELECT paid_until FROM users WHERE id=?",
+                        (user_id,))["paid_until"] or 0
+    base = max(paid_until - GRACE_DAYS * 86400, db.now())
     db.q("UPDATE users SET paid_until=? WHERE id=?",
          (base + PAID_CYCLE_DAYS * 86400, user_id))
     referrals.record_conversion(user_id)
@@ -90,6 +108,8 @@ def handle_event(payload: bytes) -> str:
             if customer:
                 db.q("UPDATE users SET stripe_customer_id=? WHERE id=?",
                      (customer, int(uid)))
+            if not _first_sight(obj.get("invoice")):
+                return f"user {uid}: invoice already counted"
             _extend_paid(int(uid))
             return f"activated user {uid}"
 
@@ -99,6 +119,8 @@ def handle_event(payload: bytes) -> str:
             user = db.one("SELECT id FROM users WHERE stripe_customer_id=?",
                           (customer,))
             if user:
+                if not _first_sight(obj.get("id")):
+                    return f"user {user['id']}: invoice already counted"
                 _extend_paid(user["id"])
                 return f"renewed user {user['id']}"
 

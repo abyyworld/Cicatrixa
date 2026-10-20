@@ -12,3 +12,6 @@ venv/
 .idea/
 .vscode/
 .vercel
+
+# node (accounts on Vercel)
+node_modules/

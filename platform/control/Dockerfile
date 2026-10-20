@@ -6,4 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 EXPOSE 8090
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090"]
+# A stop must not wait on open event streams (a project page left open): give
+# requests 5 s to finish, well inside Docker's 10 s before it kills the process.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8090", \
+     "--timeout-graceful-shutdown", "5"]

@@ -7,6 +7,7 @@
   <p class="sub">Your services never noticed you were gone.</p>
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
   <form method="post" action="/login" class="card" autocomplete="on">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
     <label>email</label>
     <input type="email" name="email" required autofocus autocomplete="email">
     <label>password</label>
@@ -14,6 +15,8 @@
     <div style="margin-top:20px"><button class="btn" style="width:100%">Log in →</button></div>
   </form>
   <p class="muted mono" style="font-size:13px;margin-top:16px">
+    <a href="/forgot-password">Forgot your password?</a></p>
+  <p class="muted mono" style="font-size:13px;margin-top:8px">
     New here? <a href="/signup">Create an account</a></p>
 </div>
 {% endblock %}

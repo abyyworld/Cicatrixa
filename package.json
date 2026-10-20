@@ -1,0 +1,18 @@
+{
+  "name": "cicatrixa-accounts",
+  "private": true,
+  "type": "module",
+  "description": "Sign-up, login, email verification and password reset for app.cicatrixa.com, as Vercel functions on Turso. See accounts/README.md.",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "test": "node --test accounts/test/*.test.js"
+  },
+  "dependencies": {
+    "@libsql/client": "0.18.0",
+    "@libsql/kysely-libsql": "0.4.1",
+    "better-auth": "1.7.7",
+    "kysely": "0.29.6"
+  }
+}
