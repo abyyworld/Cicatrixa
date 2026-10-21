@@ -246,9 +246,21 @@ MIGRATIONS: list[Migration] = [
             "CREATE UNIQUE INDEX idx_users_external_id ON users(external_id)",
             "ALTER TABLE projects ADD COLUMN external_id TEXT",
             "CREATE UNIQUE INDEX idx_projects_external_id ON projects(external_id)",
+            # When `import_online --notify` told the owner this project is deploying.
+            # Per project and set only once the email went out, so a failed send is
+            # retried on the next run and a project imported later gets its own.
+            "ALTER TABLE projects ADD COLUMN notified_at REAL",
+            # Every online project ever brought over, kept after the project is
+            # deleted here, so a later run never brings one back.
+            """CREATE TABLE imported_project (
+                external_id TEXT PRIMARY KEY,
+                imported_at REAL NOT NULL
+            )""",
         ],
         down=[
             # SQLite refuses to drop an indexed column: each index goes first.
+            "DROP TABLE IF EXISTS imported_project",
+            "ALTER TABLE projects DROP COLUMN notified_at",
             "DROP INDEX IF EXISTS idx_projects_external_id",
             "ALTER TABLE projects DROP COLUMN external_id",
             "DROP INDEX IF EXISTS idx_users_external_id",

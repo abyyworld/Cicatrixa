@@ -87,16 +87,61 @@
     finally { if (!leaving) button.disabled = false; }
   }
 
+  // A dialog holds the keyboard while it is open: the page behind it is inert, Tab and
+  // Shift+Tab cycle through the dialog's own controls, Escape closes it, and focus goes
+  // back to the button that opened it. Otherwise a keyboard user tabs out to links hidden
+  // behind the overlay, and after closing has lost their place on the page.
+  const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden])," +
+                    " select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+
   function modal(overlay) {
-    const close = () => { overlay.hidden = true; };
+    const box = overlay.querySelector(".modal") || overlay;
+    let opener = null;
+    let behind = [];
+
+    // What Tab can reach: visible controls, and of a radio group only its checked one
+    // (the arrow keys move inside a group, as everywhere else).
+    function tabbable() {
+      return [...box.querySelectorAll(FOCUSABLE)].filter((el) => !el.closest("[hidden]") &&
+        !(el.type === "radio" && !el.checked &&
+          box.querySelector(`input[type=radio][name="${CSS.escape(el.name)}"]:checked`)));
+    }
+
+    function close() {
+      if (overlay.hidden) return;
+      overlay.hidden = true;
+      for (const el of behind) el.inert = false;
+      behind = [];
+      if (opener?.isConnected) opener.focus();
+      opener = null;
+    }
+
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay || event.target.closest("[data-close]")) close();
     });
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !overlay.hidden) close();
+      if (overlay.hidden) return;
+      if (event.key === "Escape") { event.preventDefault(); close(); return; }
+      if (event.key !== "Tab") return;
+      const items = tabbable();
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      const inside = box.contains(at);
+      if (event.shiftKey ? (at === first || !inside) : (at === last || !inside)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
     });
     return {
-      open() { overlay.hidden = false; overlay.querySelector("[data-close]")?.focus(); },
+      open() {
+        opener = document.activeElement;
+        overlay.hidden = false;
+        behind = [...document.body.children].filter((el) => el !== overlay && !el.inert);
+        for (const el of behind) el.inert = true;
+        (overlay.querySelector("[data-close]") || tabbable()[0])?.focus();
+      },
       close,
     };
   }
@@ -125,19 +170,49 @@
 
   const repoOf = (s) => s.repoFull ?? s.repo_full ?? "";
 
-  // ?error= is either one of Better Auth's codes (a confirmation link that failed) or a
-  // sentence from workspace/routes.js (a refused GitHub connection).
-  const CODES = {
+  // ?error= is a short code, never a sentence: anyone can send a link to these pages
+  // with any text in the URL, and none of it may appear under Cicatrixa's own banner
+  // (a fake "reinstall the App at …" would read as ours). workspace/routes.js redirects
+  // with these codes; "reconnect" is this script's own (newProject); a confirmation link
+  // that failed brings one of Better Auth's, in capitals. Anything else is the generic
+  // sentence.
+  const ERRORS = {
+    app_missing: "GitHub connections aren't open yet.",
+    state: "That GitHub link was started from another account or has expired. Start again here.",
+    no_code: "GitHub did not send an authorization. If the App is already installed, " +
+             "use “Already installed? Connect it”.",
+    not_yours: "That installation is not on your GitHub account or on an organisation you " +
+               "administer.",
+    not_installed: "The App is not installed on your GitHub account or on an organisation " +
+                   "you administer. Install it first.",
+    taken: "That GitHub installation is already connected to another Cicatrixa account.",
+    org_request: "GitHub sent your request to the organisation's owners. Once one of them " +
+                 "approves it, that owner connects it from their own Cicatrixa account — or " +
+                 "install the App on your own GitHub account instead.",
+    github: "GitHub didn't answer as expected. Try again in a minute.",
+    admin_only: "Only an admin can do that.",
+    app_exists: "A GitHub App is already set up.",
+    app_state: "That App creation link was started from another account or has expired. " +
+               "Start again.",
+    app_failed: "GitHub didn't finish creating the App. Try again.",
+    signin: "Sign in first.",
+    reconnect: "Cicatrixa can't reach your GitHub installation any more — it may have been " +
+               "uninstalled. Connect GitHub again.",
+  };
+  const LINK_ERRORS = {
     INVALID_TOKEN: "That link has expired or was already used.",
     TOKEN_EXPIRED: "That link has expired.",
+    USER_NOT_FOUND: "That link has expired or was already used.",
+    INVALID_USER: "That link has expired or was already used.",
   };
+  const GENERIC = "Something went wrong. Try again.";
+
+  // Own keys only: "constructor" or "__proto__" in the URL must not find Object's.
+  const pick = (table, key) => (Object.hasOwn(table, key) ? table[key] : undefined);
   function urlError() {
     const e = (params.get("error") || "").trim();
     if (!e) return "";
-    if (/^[A-Za-z_]+$/.test(e)) {
-      return CODES[e.toUpperCase()] || "That link has expired or was already used.";
-    }
-    return e.slice(0, 300);
+    return pick(ERRORS, e) ?? pick(LINK_ERRORS, e.toUpperCase()) ?? GENERIC;
   }
 
   // ---------- session and masthead ----------
@@ -157,7 +232,9 @@
   function masthead(me) {
     $("who").textContent = me.user.email;
     $("who").title = me.user.email;
-    $("admin-link").hidden = !me.user.isAdmin;
+    // An admin address that has not proved its password yet still gets the link: /admin
+    // is where it confirms (admin/claim).
+    $("admin-link").hidden = !(me.user.isAdmin || me.user.adminPending);
     for (const a of document.querySelectorAll("#links a")) {
       const here = a.pathname === location.pathname.replace(/\.html$/, "");
       if (here) a.setAttribute("aria-current", "page");
@@ -237,6 +314,8 @@
     const login = gh?.accountLogin ? `@${gh.accountLogin} · ` : "";
     $("gh-status").textContent = gh ? `GitHub connected (${login}App install #${gh.installationId})`
       : "GitHub not connected yet";
+    // Until an admin has created the GitHub App, nobody's repo can be read: say so instead.
+    if (!me.app?.configured) $("notice-how").textContent = "GitHub connections open shortly.";
     $("disconnect").hidden = !gh;
     $("connect").hidden = Boolean(gh);
 
@@ -279,6 +358,20 @@
     });
   }
 
+  // Coming back to this tab is not the same as having finished on GitHub: they may only
+  // be rereading the hint. Move on once the connection exists (a change of repos needs no
+  // new one); until then keep the hint up and wait for the next return.
+  function whenConnected(changing) {
+    onReturn(async function back() {
+      if (changing) return go("/projects/new");
+      let r = null;
+      try { r = await api("me"); } catch { /* offline: try again on the next return */ }
+      if (r?.status === 401) return toLogin();
+      if (r?.ok && r.data?.github) return go("/projects/new");
+      onReturn(back);
+    });
+  }
+
   function connect(me) {
     show("error", urlError());
     const gh = me.github;
@@ -295,13 +388,17 @@
         $("install-btn").textContent = "Change which repos ↗";
         $("authorize-line").hidden = true;
       }
+      let waiting = false;
       $("install-btn").addEventListener("click", () => {
         $(gh ? "change-hint" : "install-hint").hidden = false;
-        onReturn(() => go("/projects/new"));
+        if (waiting) return;          // a second click must not stack a second listener
+        waiting = true;
+        whenConnected(Boolean(gh));
       });
     } else {
       $("noapp-card").hidden = false;
-      $(me.user.isAdmin ? "noapp-admin" : "noapp-user").hidden = false;
+      const who = me.user.isAdmin ? "admin" : me.user.adminPending ? "pending" : "user";
+      $(`noapp-${who}`).hidden = false;
     }
     $("page").hidden = false;
   }
@@ -372,8 +469,10 @@
         else setTimeout(() => { btn.textContent = REFRESH; btn.disabled = false; }, 2000);
       };
       if (r && (r.status === 409 || r.status === 503)) {
-        // Not connected (any more), or connections are not open: that page says why.
-        return location.replace(`/connect/github?${new URLSearchParams({ error: problem(r) })}`);
+        // Not connected (any more), or connections are not open: that page says why, by
+        // code — it never shows text taken from its URL.
+        const code = r.status === 503 ? "app_missing" : "reconnect";
+        return location.replace(`/connect/github?error=${code}`);
       }
       if (!r || !r.ok) {
         listFailed = true;
@@ -683,8 +782,30 @@
 
   // ---------- admin ----------
 
+  // An address on the admin list with a confirmed email is not proof enough: anyone can
+  // sign up with that address, with a password of their own, and wait for its owner to
+  // click the confirmation link. So admin/claim emails that address a link to set the
+  // password once; whoever sets it holds both the inbox and the password, and is admin
+  // from their next login.
+  function claimAdmin(me) {
+    show("claim-error", urlError());
+    $("claim-to").textContent = me.user.email;
+    $("claim-btn").addEventListener("click", () => busy($("claim-btn"), "claim-error", async () => {
+      const r = await api("admin/claim", {});
+      if (!r.ok) return show("claim-error", problem(r));
+      $("claim-sent-to").textContent = me.user.email;
+      $("claim-ask").hidden = true;
+      $("claim-sent").hidden = false;
+    }));
+    $("claim").hidden = false;
+  }
+
   async function admin(me) {
-    if (!me.user.isAdmin) { $("denied").hidden = false; return; }
+    if (!me.user.isAdmin) {
+      if (me.user.adminPending) return claimAdmin(me);
+      $("denied").hidden = false;
+      return;
+    }
     const r = await api("admin");
     if (r.status === 403) { $("denied").hidden = false; return; }
     if (!r.ok || !r.data) return fatal(problem(r));

@@ -1,6 +1,8 @@
 """Bring the online workspace onto this box, once it runs Docker:
 
     docker exec cx-control python -m app.import_online --dry-run
+    docker exec cx-control python -m app.import_online
+      ... app.<domain> moves here, verify-public.sh, `docker restart cx-control` ...
     docker exec cx-control python -m app.import_online --notify
 
 Until the platform had a Docker host, app.cicatrixa.com ran on Vercel (accounts/,
@@ -11,9 +13,23 @@ auth.verify_password), the GitHub App's credentials, every GitHub connection and
 planned project. The next start of cx-control deploys those projects (main.startup).
 docs/RUNBOOK.md, "Leaving Vercel", has the order to do it in.
 
-Safe to run again: what it brought over carries the workspace's own id (external_id),
-so a second run only adds what is new. Everything is written in one transaction;
---dry-run rolls it back after printing what it would have done.
+The import emails nobody. `--notify` is its own step, for once the box serves
+app.<domain> and the imported projects have started deploying: it tells each owner
+whose projects started, records every email that went out, and a later run sends only
+what is still owed.
+
+An account already on the box is never merged with an online one by default: an
+address proves nothing until someone has shown they own it, and whoever signed up
+here first would get the online person's projects and GitHub installation. Such
+people are listed and left out; --link-existing merges them after the operator has
+looked, and even then only when both sides confirmed the address.
+
+Safe to run again: what it brought over carries the workspace's own id (external_id).
+A second run adds what is new, carries over what changed online since (a password reset,
+while the account here still uses its online password; an email confirmed since),
+removes projects deleted online that never deployed here, and never brings back one
+deleted here. Everything is written in one transaction; --dry-run rolls it back after
+printing what it would have done.
 
 It reads TURSO_DATABASE_URL, TURSO_AUTH_TOKEN and BETTER_AUTH_SECRET (the values Vercel
 has) from cx-control's environment, i.e. platform/.env.
@@ -28,6 +44,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlsplit
@@ -36,10 +53,23 @@ import httpx
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from . import auth, db, engine, mailer
+from . import auth, db, engine, mailer, metrics, referrals
 
 NEEDS_SCHEMA = 3            # db.MIGRATIONS 3 adds the external_id columns
 ENC_PREFIX = "enc1:"
+# settings key, written in the import's own transaction: from its commit on, an import
+# has happened here, and main.py opens sign-ups (they wait for it while
+# TURSO_DATABASE_URL is set).
+IMPORTED_KEY = "online_import_at"
+# The online cx_setting row accounts/auth.js writes when a password is set through an
+# emailed reset link: pw_proof:<userId>. The one proof that whoever holds the
+# password also holds the inbox — confirming an address only shows that someone with
+# the inbox clicked, maybe on a link a squatter's sign-up sent.
+PROOF_PREFIX = "pw_proof:"
+# Resend allows 2 requests a second; a little under it.
+SEND_INTERVAL = 0.6
+# Resend's daily cap (100 on the free plan) answers every send after it the same way.
+FAILURES_IN_A_ROW = 3
 
 # The workspace's settings, under the platform's own key names. Only these are
 # copied: nothing else in that table is the workspace's to set here (a secret_key or
@@ -72,9 +102,17 @@ READS = {   # name -> (table it needs, query)
                                "createdAt, id"),
 }
 
+# An imported service that has never been tried here: what main.startup deploys.
+# ('deploying' with no deployment: admitted by a start that ended before it began.)
+WAITING = ("s.status IN ('new','deploying') AND NOT EXISTS "
+           "(SELECT 1 FROM deployments d WHERE d.service_id=s.id)")
+# One that has started here: admitted by main.startup, or deployed at least once.
+STARTED = ("(s.status='deploying' OR EXISTS "
+           "(SELECT 1 FROM deployments d WHERE d.service_id=s.id))")
+
 
 class Refused(Exception):
-    """The import cannot run as things stand. The message says why, for the operator."""
+    """The command cannot run as things stand. The message says why, for the operator."""
 
 
 # ---------- reading Turso ----------
@@ -150,6 +188,7 @@ def fetch(base: str, token: str) -> dict[str, list[dict]]:
     wanted = [name for name, (table, _) in READS.items() if table in present]
     data = {name: [] for name in READS}
     data.update(zip(wanted, query(base, token, [READS[n][1] for n in wanted])))
+    data["tables"] = tables
     return data
 
 
@@ -175,13 +214,19 @@ def decrypt_setting(secret: str, stored: str) -> str:
 @dataclass
 class Report:
     dry_run: bool = False
+    link_existing: bool = False
     admin_emails_set: bool = True
+    mail_on: bool = True
     app: str = "none online: nothing copied"
     users_new: int = 0
     users_before: int = 0
     users_linked: list[str] = field(default_factory=list)
+    users_existing: list[str] = field(default_factory=list)   # not merged: see the docstring
+    users_refreshed: list[str] = field(default_factory=list)  # password carried over again
+    users_confirmed: list[str] = field(default_factory=list)  # confirmed online since
     no_password: list[str] = field(default_factory=list)
     admins: list[str] = field(default_factory=list)
+    admins_unproven: list[str] = field(default_factory=list)
     users_skipped: list[str] = field(default_factory=list)
     connections_new: int = 0
     connections_before: int = 0
@@ -190,19 +235,38 @@ class Report:
     services_new: int = 0
     projects_before: int = 0
     projects_skipped: list[str] = field(default_factory=list)
-    # box user id -> {"email", "no_password", "projects": [(name, slug)]}, for --notify:
-    # only projects this run brought over, so a second run emails nobody twice.
-    to_notify: dict[int, dict] = field(default_factory=dict)
-    mail: str = ""
+    projects_deleted_here: list[str] = field(default_factory=list)
+    projects_removed: list[str] = field(default_factory=list)
+    projects_gone_kept: list[str] = field(default_factory=list)
+    held_back: list[str] = field(default_factory=list)
+    capacity: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         out = [("DRY RUN, nothing was written. " if self.dry_run else "")
-               + f"Online workspace -> {db.DB_PATH}",
-               f"  GitHub App: {self.app}",
-               f"  users: {self.users_new} new, {len(self.users_linked)} matched an account "
-               f"already here (it keeps its own password), {self.users_before} imported before"]
+               + f"Online workspace -> {db.DB_PATH}"]
+        if not self.mail_on:
+            out += ["  ⚠ RESEND_API_KEY is empty here, and these people had email online. Put "
+                    "Vercel's",
+                    "    RESEND_API_KEY and MAIL_FROM in platform/.env and `docker compose up -d` "
+                    "first: without",
+                    "    them nobody can reset a forgotten password themselves, sign-ups here are "
+                    "confirmed",
+                    "    without proof, and --notify cannot tell anyone their projects deploy."]
+        out += [f"  GitHub App: {self.app}",
+                f"  users: {self.users_new} new, {len(self.users_linked)} linked to an account "
+                f"already here (it keeps its own password), {self.users_before} imported before"]
         out += [f"    = {e}" for e in self.users_linked]
         out += [f"    ✗ {s}" for s in self.users_skipped]
+        if self.users_existing:
+            out.append(f"  {len(self.users_existing)} not brought over: an account with the "
+                       "same address was made here, and nothing shows it is the same person")
+            out += [f"    ✗ {s}" for s in self.users_existing]
+            if not self.link_existing:
+                out.append("    each is left out with their GitHub connection and projects. "
+                           "If an account above is theirs, run again with --link-existing")
+        out += [f"    ↻ {e}: password changed online since; carried over" for e in
+                self.users_refreshed]
+        out += [f"    ↻ {e}: email confirmed online since" for e in self.users_confirmed]
         if self.no_password:
             out.append(f"  {len(self.no_password)} with no password online: they choose one "
                        "with \"Forgot your password?\" here")
@@ -212,17 +276,28 @@ class Report:
             admins += (" (ADMIN_EMAILS is empty here: make yours with "
                        "`docker exec cx-control python -m app.promote you@example.com`)")
         out.append(f"  new admins: {admins}")
+        for e in self.admins_unproven:
+            out.append(f"    ! {e} is in ADMIN_EMAILS but its password was never set through an "
+                       "emailed reset link online: not admin here (`python -m app.promote`)")
         out.append(f"  GitHub connections: {self.connections_new} new, "
                    f"{self.connections_before} imported before")
         out += [f"    ✗ {s}" for s in self.connections_skipped]
         out.append(f"  projects: {self.projects_new} new ({self.services_new} services), "
                    f"{self.projects_before} imported before")
         out += [f"    ✗ {s}" for s in self.projects_skipped]
-        if self.mail:
-            out.append(f"  email: {self.mail}")
-        if self.projects_new and not self.dry_run:
-            out.append("  next: `docker restart cx-control` deploys the new projects as it "
-                       "starts")
+        out += [f"    ✗ {s}: deleted here since it was imported; not brought back"
+                for s in self.projects_deleted_here]
+        out += [f"    − {s}: deleted online and never deployed here; removed"
+                for s in self.projects_removed]
+        out += [f"    ! {s}" for s in self.projects_gone_kept]
+        if self.held_back:
+            out.append("  held back (they wait, and the first restart of cx-control after "
+                       "that changes deploys them):")
+            out += [f"    ✗ {s}" for s in self.held_back]
+        out += [f"  {line}" for line in self.capacity]
+        if not self.dry_run:
+            out.append("  next: docs/RUNBOOK.md, Leaving Vercel — move app and * here, verify, "
+                       "then `docker restart cx-control` deploys what waits; --notify after")
         return "\n".join(out)
 
 
@@ -261,6 +336,10 @@ def _epoch(value, default: float) -> float:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return default
+
+
+def _day(epoch: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch or 0))
 
 
 def _branch_ok(branch: str) -> bool:
@@ -307,9 +386,61 @@ def _copy_settings(c, data, report: Report, secret: str):
     report.app = f"id {app_id} ({slug}) copied"
 
 
-def _import_users(c, data, report: Report, admin_emails: set[str], now: float):
+def _account_here(c, row) -> str:
+    """What the operator needs to judge whether an account here is the online person's."""
+    projects = c.execute("SELECT COUNT(*) n FROM projects WHERE user_id=?",
+                         (row["id"],)).fetchone()["n"]
+    github = c.execute("SELECT gh_login FROM github_connections WHERE user_id=? "
+                       "ORDER BY id DESC LIMIT 1", (row["id"],)).fetchone()
+    return (f"made here {_day(row['created_at'])}, "
+            f"email {'confirmed' if row['email_verified'] else 'NOT confirmed'}, "
+            f"{projects} project{'' if projects == 1 else 's'}, "
+            + (f"GitHub connected ({github['gh_login'] or '?'})" if github else "no GitHub"))
+
+
+def _link_refusal(c, row, online_verified: bool, link_existing: bool) -> str | None:
+    """Why the online account must not be merged into the account `row` here, if so.
+
+    Merging hands that account the online person's projects and GitHub installation,
+    and an address is all the two share. The box takes sign-ups by any host name once
+    `*` points at it, and with email off it confirms them without proof — so by
+    default nothing is merged, and even when asked to, not without both sides having
+    confirmed the address."""
+    if row["external_id"]:
+        return "the account here is already linked to another online account"
+    facts = _account_here(c, row)
+    if not link_existing:
+        return f"already has an account here ({facts})"
+    if not row["email_verified"]:
+        return f"the account here never confirmed its email ({facts}); not linked"
+    if not online_verified:
+        return f"the online account never confirmed its email ({facts}); not linked"
+    return None
+
+
+def _refresh_user(c, row, email: str, verified: bool, online_hash: str | None,
+                  admin: bool, report: Report):
+    """Carry over what changed online since the last run, for an account that still
+    follows its online one: its hash is still Better Auth's (auth.hash_password writes
+    another format, so a password set here is never overwritten)."""
+    follows = bool(_BETTER_AUTH_HASH.fullmatch(row["pw_hash"] or ""))
+    if follows and online_hash and online_hash != row["pw_hash"]:
+        c.execute("UPDATE users SET pw_hash=? WHERE id=?", (online_hash, row["id"]))
+        report.users_refreshed.append(email)
+    if verified and not row["email_verified"]:
+        c.execute("UPDATE users SET email_verified=1 WHERE id=?", (row["id"],))
+        report.users_confirmed.append(email)
+    if follows and admin and not row["is_admin"]:
+        c.execute("UPDATE users SET is_admin=1 WHERE id=?", (row["id"],))
+        report.admins.append(email)
+
+
+def _import_users(c, data, report: Report, admin_emails: set[str], now: float,
+                  link_existing: bool):
     """Returns {online user id: user id here} for everyone who arrived or was here."""
     passwords = {str(r["userId"]): r["password"] for r in data["credentials"]}
+    proofs = {str(r["key"])[len(PROOF_PREFIX):] for r in data["settings"]
+              if str(r["key"]).startswith(PROOF_PREFIX)}
     mapped: dict[str, int] = {}
     for u in data["users"]:
         ext = str(u["id"] or "")
@@ -317,16 +448,25 @@ def _import_users(c, data, report: Report, admin_emails: set[str], now: float):
         if not ext or "@" not in email:
             report.users_skipped.append(f"online user {ext or '?'}: no usable email")
             continue
-        row = c.execute("SELECT id FROM users WHERE external_id=?", (ext,)).fetchone()
+        verified = _truthy(u["emailVerified"])
+        pw_hash = passwords.get(ext)
+        if not (isinstance(pw_hash, str) and _BETTER_AUTH_HASH.fullmatch(pw_hash)):
+            pw_hash = None
+        # ADMIN_EMAILS names the address; a confirmed email shows only that someone with
+        # the inbox clicked. The password proof shows the password's holder has it too.
+        admin = verified and email in admin_emails and ext in proofs
+        row = c.execute("SELECT * FROM users WHERE external_id=?", (ext,)).fetchone()
         if row:
             mapped[ext] = row["id"]
             report.users_before += 1
+            _refresh_user(c, row, email, verified, pw_hash, admin, report)
             continue
-        row = c.execute("SELECT id, external_id FROM users WHERE email=?", (email,)).fetchone()
+        row = c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if row:
-            if row["external_id"]:
-                report.users_skipped.append(f"{email}: the account here is already linked "
-                                            "to another online account")
+            why = _link_refusal(c, row, verified, link_existing)
+            if why:
+                listed = report.users_skipped if row["external_id"] else report.users_existing
+                listed.append(f"{email}: {why}")
                 continue
             # Their account here stays as it is, password included; it only learns
             # which online account it is, so the projects and connection find it.
@@ -334,16 +474,11 @@ def _import_users(c, data, report: Report, admin_emails: set[str], now: float):
             mapped[ext] = row["id"]
             report.users_linked.append(email)
             continue
-        verified = _truthy(u["emailVerified"])
-        pw_hash = passwords.get(ext)
-        if not (isinstance(pw_hash, str) and _BETTER_AUTH_HASH.fullmatch(pw_hash)):
+        if pw_hash is None:
             # Only email sign-in exists online, so this should not happen; if it does,
             # a password nobody knows, and "Forgot your password?" sets a real one.
             pw_hash = auth.hash_password(secrets.token_urlsafe(32))
             report.no_password.append(email)
-        # The emailed link they clicked online is the proof ADMIN_EMAILS relies on
-        # (main.verify_code_submit asks the same of a code entered here).
-        admin = verified and email in admin_emails
         # created_at is now, not their online sign-up: the 14-day trial is for
         # deploying, which starts today.
         mapped[ext] = c.execute(
@@ -353,6 +488,8 @@ def _import_users(c, data, report: Report, admin_emails: set[str], now: float):
         report.users_new += 1
         if admin:
             report.admins.append(email)
+        elif verified and email in admin_emails:
+            report.admins_unproven.append(email)
     return mapped
 
 
@@ -413,20 +550,60 @@ def _project_problem(c, project: dict, services: list[dict]) -> str | None:
     return None
 
 
-def _import_projects(c, data, report: Report, mapped: dict[str, int],
-                     emails: dict[str, str], no_password: set[str], now: float):
+def _label(p) -> str:
+    return f"{p['name']} ({p['slug']})"
+
+
+def _remove_gone_projects(c, data, report: Report):
+    """Projects deleted online since they were imported. One that never deployed here
+    goes too — nobody has seen it here, and startup would otherwise build what its
+    owner threw away. One that has deployed is the owner's to delete here.
+
+    Only when the online database has the projects table at all: without it, every
+    project would look deleted."""
+    if "cx_project" not in {t["name"] for t in data.get("tables", [])}:
+        return
+    online = {str(p["id"]) for p in data["projects"]}
+    for p in c.execute("SELECT * FROM projects WHERE external_id IS NOT NULL "
+                       "ORDER BY id").fetchall():
+        if p["external_id"] in online:
+            continue
+        tried = c.execute("SELECT 1 FROM services s WHERE s.project_id=? AND NOT ("
+                          + WAITING + ")", (p["id"],)).fetchone()
+        if tried:
+            report.projects_gone_kept.append(f"{_label(p)}: deleted online, but it has "
+                                             "deployed here; kept (delete it here if wanted)")
+            continue
+        c.execute("SAVEPOINT gone")
+        try:
+            c.execute("DELETE FROM chat_messages WHERE project_id=?", (p["id"],))
+            c.execute("DELETE FROM services WHERE project_id=?", (p["id"],))
+            c.execute("DELETE FROM projects WHERE id=?", (p["id"],))
+        except sqlite3.IntegrityError:
+            c.execute("ROLLBACK TO gone")
+            report.projects_gone_kept.append(f"{_label(p)}: deleted online; kept, because "
+                                             "something here still refers to it")
+        else:
+            report.projects_removed.append(_label(p))
+        c.execute("RELEASE gone")
+
+
+def _import_projects(c, data, report: Report, mapped: dict[str, int], now: float):
     services: dict[str, list[dict]] = {}
     for s in data["services"]:
         services.setdefault(str(s["projectId"]), []).append(s)
     for p in data["projects"]:
         ext = str(p["id"])
-        label = f"{p['name']} ({p['slug']})"
+        label = _label(p)
         uid = mapped.get(str(p["userId"]))
         if uid is None:
-            report.projects_skipped.append(f"{label}: its owner was not imported")
+            report.projects_skipped.append(f"{label}: its owner was not brought over")
             continue
         if c.execute("SELECT 1 FROM projects WHERE external_id=?", (ext,)).fetchone():
             report.projects_before += 1
+            continue
+        if c.execute("SELECT 1 FROM imported_project WHERE external_id=?", (ext,)).fetchone():
+            report.projects_deleted_here.append(label)       # engine.delete_project removed it
             continue
         mine = services.get(ext, [])
         problem = _project_problem(c, p, mine)
@@ -438,6 +615,8 @@ def _import_projects(c, data, report: Report, mapped: dict[str, int],
         pid = c.execute("INSERT INTO projects(user_id,name,slug,status,created_at,external_id)"
                         " VALUES(?,?,?,'new',?,?)",
                         (uid, name, p["slug"], created, ext)).lastrowid
+        c.execute("INSERT INTO imported_project(external_id,imported_at) VALUES(?,?)",
+                  (ext, now))
         # Primary first (the query's order), as create_project inserts them. Status
         # 'new' with no deployment is what main.startup looks for.
         for s in mine:
@@ -447,70 +626,91 @@ def _import_projects(c, data, report: Report, mapped: dict[str, int],
                        s["branch"], created))
             report.services_new += 1
         report.projects_new += 1
-        email = emails[str(p["userId"])]
-        entry = report.to_notify.setdefault(uid, {"email": email, "projects": [],
-                                                  "no_password": email in no_password})
-        entry["projects"].append((name, p["slug"]))
+
+
+def _waiting_projects(c):
+    return c.execute(
+        "SELECT p.id, p.name, p.slug, p.user_id, u.email FROM projects p "
+        "JOIN users u ON u.id=p.user_id WHERE p.external_id IS NOT NULL AND EXISTS "
+        "(SELECT 1 FROM services s WHERE s.project_id=p.id AND " + WAITING + ") "
+        "ORDER BY p.id").fetchall()
+
+
+def _hold_back(c, report: Report):
+    """Projects main.startup will not deploy, whatever the limits: their owner has no
+    GitHub connection here (theirs was not imported), or is an account made here
+    whose trial has ended. Listed, so nobody is surprised."""
+    for p in _waiting_projects(c):
+        owner = c.execute("SELECT * FROM users WHERE id=?", (p["user_id"],)).fetchone()
+        if not c.execute("SELECT 1 FROM github_connections WHERE user_id=?",
+                         (p["user_id"],)).fetchone():
+            report.held_back.append(f"{_label(p)} of {p['email']}: no GitHub connection here")
+        elif not referrals.can_deploy(owner)[0]:
+            report.held_back.append(f"{_label(p)} of {p['email']}: the account here has no "
+                                    "trial left and is not paid")
+
+
+def _capacity(c, report: Report):
+    """What waits to deploy, against this box's limits — main.startup applies the same
+    ones (metrics.check_service_count, check_deploy_quota) and leaves what does not
+    fit waiting. Set /admin's limits to fit before `docker restart cx-control`."""
+    waiting = c.execute("SELECT p.user_id FROM services s JOIN projects p "
+                        "ON p.id=s.project_id WHERE p.external_id IS NOT NULL AND "
+                        + WAITING).fetchall()
+    if not waiting:
+        return
+    per = metrics.RAM_PER_CONTAINER_MB
+    limits, usage = metrics.global_limits(), metrics.global_usage()
+    room = max(0, (limits["ram_mb"] - usage["ram_reserved_mb"]) // per)
+    lines = [f"capacity: {len(waiting)} imported services wait to deploy. The instance "
+             f"allows {limits['services']} services (it holds {usage['services']}) and "
+             f"{limits['ram_mb']}MB of RAM: {room} more can run at {per}MB each"]
+    if usage["services"] > limits["services"]:
+        lines.append(f"  ✗ over the instance's service limit: none of them deploys until "
+                     f"/admin → instance limits allows {usage['services']}")
+    elif len(waiting) > room:
+        lines.append(f"  ✗ {len(waiting) - room} of them do not fit the instance's RAM "
+                     "limit: they wait until /admin → instance limits is raised")
+    by_owner: dict[int, int] = {}
+    for w in waiting:
+        by_owner[w["user_id"]] = by_owner.get(w["user_id"], 0) + 1
+    for uid, n in by_owner.items():
+        owner = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if owner["is_admin"]:
+            continue                                     # per-account quotas skip admins
+        quota = metrics.user_quota(owner)
+        held = c.execute("SELECT COUNT(*) n FROM services s JOIN projects p ON "
+                         "p.id=s.project_id WHERE p.user_id=?", (uid,)).fetchone()["n"]
+        running = c.execute("SELECT COUNT(*) n FROM services s JOIN projects p ON "
+                            "p.id=s.project_id WHERE p.user_id=? AND s.status IN "
+                            "('live','deploying') AND NOT (" + WAITING + ")",
+                            (uid,)).fetchone()["n"]
+        fits = max(0, quota["ram_mb"] // per - running)
+        if held > quota["services"]:
+            lines.append(f"  ✗ {owner['email']}: {held} services, their quota allows "
+                         f"{quota['services']}: none of theirs deploys until it is raised")
+        elif n > fits:
+            lines.append(f"  ✗ {owner['email']}: {n} to deploy, their RAM quota "
+                         f"({quota['ram_mb']}MB) runs {fits}: the rest wait")
+    report.capacity = lines
 
 
 def apply(c: sqlite3.Connection, data: dict, report: Report, *, secret: str,
-          admin_emails: set[str], now: float):
+          admin_emails: set[str], now: float, link_existing: bool = False):
     """Writes what `fetch` read, inside the caller's transaction."""
     _copy_settings(c, data, report, secret)
-    mapped = _import_users(c, data, report, admin_emails, now)
+    mapped = _import_users(c, data, report, admin_emails, now, link_existing)
     emails = {str(u["id"]): (u["email"] or "").strip().lower() for u in data["users"]}
     _import_connections(c, data, report, mapped, emails, now)
-    _import_projects(c, data, report, mapped, emails, set(report.no_password), now)
+    _remove_gone_projects(c, data, report)          # first: it may free an address
+    _import_projects(c, data, report, mapped, now)
+    _hold_back(c, report)
+    _capacity(c, report)
+    c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) "
+              "DO UPDATE SET value=excluded.value", (IMPORTED_KEY, str(now)))
 
 
-# ---------- telling people ----------
-
-def send_deploying(to: str, projects: list[tuple[str, str]], no_password: bool) -> bool:
-    login = f"{engine.BASE_URL}/login"
-    listed = "\n".join(f"  {name}  {engine.service_url(slug)}" for name, slug in projects)
-    reset = (" Your account has no password here yet: choose one with \"Forgot your "
-             "password?\" on that page." if no_password else "")
-    text = (f"Cicatrixa can deploy now. The projects you planned are being deployed:\n\n"
-            f"{listed}\n\nEach project's page shows its deploy log as it runs. Sign in at "
-            f"{login} with your Cicatrixa email and password.{reset}")
-    rows = "".join(
-        f'<div style="margin:0 0 8px"><b>{html.escape(name)}</b> '
-        f'<span style="color:#74857B">{html.escape(engine.service_url(slug))}</span></div>'
-        for name, slug in projects)
-    body = f"""
-<p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 18px">
-Cicatrixa can deploy now. The projects you planned are being deployed:</p>
-<div style="font-size:13px;margin:0 0 22px">{rows}</div>
-<a href="{html.escape(login)}" style="display:inline-block;background:#40D967;color:#06130A;
-text-decoration:none;padding:11px 22px;border-radius:8px;font-size:12.5px;font-weight:600;
-letter-spacing:.04em">Watch them deploy →</a>
-<p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Sign in with your Cicatrixa email
-and password.{html.escape(reset)}</p>"""
-    return mailer.send(to, "Deploying is open: your Cicatrixa projects are on their way",
-                       text, mailer._wrap("deploying is open", body))
-
-
-def _people(n: int) -> str:
-    return f"{n} {'person' if n == 1 else 'people'}"
-
-
-def _notify(report: Report):
-    people = list(report.to_notify.values())
-    if report.dry_run:
-        report.mail = f"would email {_people(len(people))} (never in a dry run)"
-    elif not mailer.available():
-        report.mail = "RESEND_API_KEY is not set here, so nobody was emailed"
-    else:
-        sent = sum(1 for p in people
-                   if send_deploying(p["email"], p["projects"], p["no_password"]))
-        report.mail = f"emailed {sent} of {_people(len(people))}" + (
-            f"; the last failure: {mailer.last_error}" if sent < len(people) else "")
-
-
-# ---------- the command ----------
-
-def run(*, dry_run: bool = False, notify: bool = False, env=None) -> Report:
-    env = os.environ if env is None else env
+def _require_schema():
     try:
         version = db.schema_version()
     except sqlite3.OperationalError:
@@ -519,6 +719,11 @@ def run(*, dry_run: bool = False, notify: bool = False, env=None) -> Report:
         raise Refused(f"this database is at schema version {version}; the import needs "
                       f"{NEEDS_SCHEMA}. Start cx-control with this code once (it migrates as "
                       "it starts), then run this again.")
+
+
+def run(*, dry_run: bool = False, link_existing: bool = False, env=None) -> Report:
+    env = os.environ if env is None else env
+    _require_schema()
     names = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "BETTER_AUTH_SECRET")
     url, token, secret = ((env.get(n) or "").strip() for n in names)
     missing = [n for n, v in zip(names, (url, token, secret)) if not v]
@@ -528,14 +733,125 @@ def run(*, dry_run: bool = False, notify: bool = False, env=None) -> Report:
     admin_emails = {e.strip().lower() for e in (env.get("ADMIN_EMAILS") or "").split(",")
                     if e.strip()}
     data = fetch(turso_http_url(url), token)          # all reads before any write
-    report = Report(dry_run=dry_run, admin_emails_set=bool(admin_emails))
+    report = Report(dry_run=dry_run, link_existing=link_existing,
+                    admin_emails_set=bool(admin_emails), mail_on=mailer.available())
     with _write_transaction(db.conn(), commit=not dry_run):
         apply(db.conn(), data, report, secret=secret, admin_emails=admin_emails,
-              now=db.now())
-    if notify:
-        _notify(report)                               # only after the commit
+              now=db.now(), link_existing=link_existing)
     return report
 
+
+# ---------- telling people (--notify) ----------
+
+def send_deploying(to: str, projects: list[tuple[str, str]]) -> bool:
+    login = f"{engine.BASE_URL}/login"
+    listed = "\n".join(f"  {name}  {engine.service_url(slug)}" for name, slug in projects)
+    forgot = "Forgot it? \"Forgot your password?\" on that page sends you a new one."
+    text = (f"Cicatrixa can deploy now, and the projects you planned have started deploying:"
+            f"\n\n{listed}\n\nEach project's page shows its deploy log. Sign in at {login} "
+            f"with your Cicatrixa email and password. {forgot}")
+    rows = "".join(
+        f'<div style="margin:0 0 8px"><b>{html.escape(name)}</b> '
+        f'<span style="color:#74857B">{html.escape(engine.service_url(slug))}</span></div>'
+        for name, slug in projects)
+    body = f"""
+<p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 18px">
+Cicatrixa can deploy now, and the projects you planned have started deploying:</p>
+<div style="font-size:13px;margin:0 0 22px">{rows}</div>
+<a href="{html.escape(login)}" style="display:inline-block;background:#40D967;color:#06130A;
+text-decoration:none;padding:11px 22px;border-radius:8px;font-size:12.5px;font-weight:600;
+letter-spacing:.04em">Watch them deploy →</a>
+<p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Sign in with your Cicatrixa email
+and password. {html.escape(forgot)}</p>"""
+    return mailer.send(to, "Deploying is open: your Cicatrixa projects are deploying",
+                       text, mailer._wrap("deploying is open", body))
+
+
+@dataclass
+class Notice:
+    dry_run: bool = False
+    owed: list[str] = field(default_factory=list)      # "email: project, project"
+    sent: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    not_started: int = 0
+    stopped: bool = False
+    last_error: str = ""
+
+    def summary(self) -> str:
+        if self.dry_run:
+            out = [f"DRY RUN, nobody was emailed. {len(self.owed)} would be:"]
+            out += [f"  - {o}" for o in self.owed]
+        else:
+            out = [f"emailed {len(self.sent)} of {len(self.owed)}"]
+            out += [f"  ✓ {e}" for e in self.sent]
+            out += [f"  ✗ {e}" for e in self.failed]
+            if self.failed:
+                out.append(f"  the last failure: {self.last_error}")
+            if self.stopped:
+                out.append(f"  stopped after {FAILURES_IN_A_ROW} failures in a row (Resend's "
+                           "daily limit answers like this): run --notify again later")
+            elif self.failed:
+                out.append("  run --notify again later: it sends only what is still owed")
+        if self.not_started:
+            out.append(f"  {self.not_started} imported project(s) have not started deploying "
+                       "yet; a later --notify tells their owners once they have")
+        return "\n".join(out)
+
+
+def _owed() -> list[tuple[dict, list]]:
+    """(owner, projects) owed a 'deploying' email: imported projects nobody was told
+    about yet, at least one of whose services has started here (main.startup admitted
+    it, or it has a deployment), of owners still allowed to deploy."""
+    rows = db.all_(
+        "SELECT p.id, p.name, p.slug, p.user_id FROM projects p "
+        "WHERE p.external_id IS NOT NULL AND p.notified_at IS NULL AND EXISTS "
+        "(SELECT 1 FROM services s WHERE s.project_id=p.id AND " + STARTED + ") "
+        "ORDER BY p.user_id, p.id")
+    owed: dict[int, tuple[dict, list]] = {}
+    for p in rows:
+        owner = db.one("SELECT * FROM users WHERE id=?", (p["user_id"],))
+        if owner and referrals.can_deploy(owner)[0]:
+            owed.setdefault(owner["id"], (owner, []))[1].append(p)
+    return list(owed.values())
+
+
+def notify(*, dry_run: bool = False, sleep=time.sleep) -> Notice:
+    """Email each owner whose imported projects have started deploying. A project is
+    marked once its email went out, so a send that failed is tried again next run, and
+    nobody hears about the same project twice."""
+    _require_schema()
+    if not dry_run and not mailer.available():
+        raise Refused("RESEND_API_KEY is not set here, so nobody can be emailed. Put "
+                      "Vercel's RESEND_API_KEY and MAIL_FROM in platform/.env, `docker "
+                      "compose up -d`, then run --notify again: it sends what is owed.")
+    notice = Notice(dry_run=dry_run)
+    in_a_row = 0
+    for owner, projects in _owed():
+        notice.owed.append(f"{owner['email']}: {', '.join(p['name'] for p in projects)}")
+        if dry_run:
+            continue
+        if notice.sent or notice.failed:
+            sleep(SEND_INTERVAL)
+        if send_deploying(owner["email"], [(p["name"], p["slug"]) for p in projects]):
+            db.q(f"UPDATE projects SET notified_at=? WHERE id IN "
+                 f"({','.join('?' * len(projects))})", (db.now(), *(p["id"] for p in projects)))
+            notice.sent.append(owner["email"])
+            in_a_row = 0
+            continue
+        notice.failed.append(owner["email"])
+        notice.last_error = mailer.last_error
+        in_a_row += 1
+        if in_a_row >= FAILURES_IN_A_ROW:
+            notice.stopped = True
+            break
+    notice.not_started = db.one(
+        "SELECT COUNT(*) n FROM projects p WHERE p.external_id IS NOT NULL AND "
+        "p.notified_at IS NULL AND NOT EXISTS (SELECT 1 FROM services s WHERE "
+        "s.project_id=p.id AND " + STARTED + ")")["n"]
+    return notice
+
+
+# ---------- the command ----------
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -543,21 +859,31 @@ def main(argv: list[str] | None = None) -> int:
         description="Copy the online workspace's users, GitHub App, connections and planned "
                     "projects into this box (docs/RUNBOOK.md, \"Leaving Vercel\").")
     parser.add_argument("--dry-run", action="store_true",
-                        help="print what would be imported and write nothing")
+                        help="print what would be done, and write or send nothing")
+    parser.add_argument("--link-existing", action="store_true",
+                        help="merge an online account into an account already here with the "
+                             "same address, when both confirmed it (check the dry run first)")
     parser.add_argument("--notify", action="store_true",
-                        help="email each person whose projects this run imports")
+                        help="import nothing: email the owners whose imported projects have "
+                             "started deploying and were not told yet")
     args = parser.parse_args(argv)
+    if args.notify and args.link_existing:
+        parser.error("--notify only sends email; --link-existing belongs to the import")
     # The live database as it is: no schema work from a side door, and no empty
     # database conjured up at a wrong path (as app.promote).
     if not os.path.exists(db.DB_PATH):
         print(f"no database at {db.DB_PATH}: run this inside cx-control", file=sys.stderr)
         return 1
     try:
-        report = run(dry_run=args.dry_run, notify=args.notify)
+        if args.notify:
+            print(notify(dry_run=args.dry_run).summary())
+        else:
+            print(run(dry_run=args.dry_run, link_existing=args.link_existing).summary())
     except Refused as exc:
-        print(f"import refused, nothing was written: {exc}", file=sys.stderr)
+        what = "notify refused, nobody was emailed" if args.notify \
+            else "import refused, nothing was written"
+        print(f"{what}: {exc}", file=sys.stderr)
         return 1
-    print(report.summary())
     return 0
 
 

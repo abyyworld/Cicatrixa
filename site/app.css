@@ -122,6 +122,7 @@ label .aside{text-transform:none;letter-spacing:0}
   white-space:pre-wrap;word-break:break-word;max-height:460px;overflow-y:auto}
 .term:empty::before{content:attr(data-empty);color:var(--muted)}
 .term.short{max-height:300px}
+.term .c{color:var(--muted)}
 
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{font:10.5px var(--mono);font-weight:600;text-transform:uppercase;letter-spacing:.12em;
@@ -213,6 +214,8 @@ input.filter{margin-bottom:8px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px}
 .stats .v{font-size:20px;font-weight:600}
 .stats .sub{font-size:12px;color:var(--muted)}
+.claim p{margin:0 0 16px}
+.claim .err{margin-top:0}
 
 @media (max-width:720px){
   header.masthead{position:static}

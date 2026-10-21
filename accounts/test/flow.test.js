@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+import { createClient } from "@libsql/client";
+
 const BASE = "http://localhost:3000";
 const dir = mkdtempSync(join(tmpdir(), "cx-accounts-"));
 Object.assign(process.env, {
@@ -74,6 +76,15 @@ const lastMailTo = (to) => [...outbox].reverse().find((m) => m.to[0] === to);
 const signUp = (c, email, password = "correct horse battery") =>
   c.post("/sign-up/email", { email, password, name: email.split("@")[0],
                              callbackURL: "/dashboard?welcome=1" });
+
+// The forgot-password flow end to end: request, emailed link, new password.
+async function resetPassword(c, email, newPassword) {
+  assert.equal((await c.post("/request-password-reset", {
+    email, redirectTo: `${BASE}/reset-password` })).status, 200);
+  const landing = await c.get(linkIn(lastMailTo(email)).replace(BASE, ""));
+  const token = new URL(landing.location).searchParams.get("token");
+  assert.equal((await c.post("/reset-password", { newPassword, token })).status, 200);
+}
 
 async function verifiedUser(email, password = "correct horse battery") {
   const c = client();
@@ -154,6 +165,41 @@ test("forgot password: emailed link, new password works, old one and old session
     assert.equal((await c.post("/sign-in/email", { email: "eve@example.com",
                                                    password: "a brand new one" })).status, 200);
     assert.equal((await elsewhere.get("/get-session")).data, null);
+  });
+
+// workspace/routes.js makes an ADMIN_EMAILS address an admin only with this proof.
+test("a password set through a reset link is recorded as the proof an admin needs", async () => {
+  const db = createClient({ url: process.env.TURSO_DATABASE_URL });
+  const proof = async (id) => (await db.execute({
+    sql: "select value from cx_setting where key = ?", args: [`pw_proof:${id}`] })).rows[0]?.[0];
+  const c = await verifiedUser("pat@example.com");
+  const id = (await c.get("/get-session")).data.user.id;
+  assert.equal(await proof(id), undefined, "a confirmation link is no proof");
+  await resetPassword(c, "pat@example.com", "chosen from the link");
+  assert.match(await proof(id), /^\d{4}-\d\d-\d\dT/);
+});
+
+test("a proof that cannot be written still resets the password and ends old sessions",
+  async () => {
+    const db = createClient({ url: process.env.TURSO_DATABASE_URL });
+    const elsewhere = await verifiedUser("quin@example.com");
+    await db.execute("create table if not exists cx_setting (key text primary key, " +
+                     "value text not null, updatedAt text not null)");
+    await db.execute("create trigger no_proofs before insert on cx_setting " +
+                     "begin select raise(abort, 'cx_setting is read-only'); end");
+    const errors = [];
+    const original = console.error;
+    console.error = (...a) => errors.push(a.join(" "));
+    try {
+      await resetPassword(client(), "quin@example.com", "a new one entirely");
+    } finally {
+      console.error = original;
+      await db.execute("drop trigger no_proofs");
+    }
+    assert.ok(errors.some((e) => e.includes("could not record a password reset")));
+    assert.equal((await elsewhere.get("/get-session")).data, null);
+    assert.equal((await client().post("/sign-in/email", { email: "quin@example.com",
+                                                          password: "a new one entirely" })).status, 200);
   });
 
 test("forgot password answers the same for an unknown email, and sends nothing", async () => {

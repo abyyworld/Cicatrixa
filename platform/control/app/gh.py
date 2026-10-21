@@ -248,6 +248,9 @@ def default_branch(connection, repo_full: str) -> str:
 
 
 def clone_url(connection, repo_full: str) -> str:
+    """The repo's URL with the connection's token in it. Never hand it to git as it
+    is — git would store it in the checkout's .git/config: engine.clone_repo and
+    engine.split_credentials turn the token into a header git does not keep."""
     token = conn_token(connection)
     if not token:
         return f"https://github.com/{repo_full}.git"

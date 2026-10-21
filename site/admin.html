@@ -30,6 +30,23 @@
   <p class="sub">This page is for the people who run Cicatrixa.</p>
   <a class="btn" href="/dashboard">Back to your dashboard →</a>
 </div>
+<div id="claim" class="mid" hidden>
+  <div class="lbl-caps">admin access</div>
+  <h1>Confirm it's <em>you</em></h1>
+  <p class="sub">Your address is on the admin list. A confirmed email alone doesn't prove the
+    account is yours: anyone can sign up with an address and wait for its owner to click the
+    confirmation link.</p>
+  <div id="claim-ask" class="card claim">
+    <p class="muted small">So we email <b class="ink" id="claim-to"></b> a link to set
+      your password once. Setting it proves you hold this inbox <strong class="ink">and</strong>
+      this password. Then log in with it, and this page is yours.</p>
+    <div id="claim-error" class="err" hidden></div>
+    <button class="btn" type="button" id="claim-btn">Email me the link →</button>
+  </div>
+  <div id="claim-sent" class="ok" hidden>✔ Sent. Check the inbox of <span id="claim-sent-to"></span>,
+    open the link (it works for an hour) and set your password, then log in with it — you'll be
+    admin from then on.</div>
+</div>
 <div id="page" class="wide" hidden>
   <div class="lbl-caps">instance-wide view</div>
   <h1>Instance <em>admin</em></h1>
@@ -73,12 +90,22 @@
     <h2>Moving to a server</h2>
     <p class="muted small">Nothing is built or run here — there is no Docker host yet. When one
       is up, one command on the box imports every user (their passwords keep working), this
-      GitHub App, every connection and every planned project, and the platform deploys them.
-      Then <code>app.cicatrixa.com</code> moves to the box.</p>
-    <pre class="term">docker exec cx-control python -m app.import_online --dry-run
-docker exec cx-control python -m app.import_online</pre>
-    <p class="muted small">The exact order — box, <code>platform/.env</code>, import, DNS,
-      Vercel — is in <code>docs/RUNBOOK.md</code>, section “Leaving Vercel”.</p>
+      GitHub App, every connection and every planned project. Then <code>app.cicatrixa.com</code>
+      moves to the box, the platform deploys the projects, and everyone gets the email they
+      were promised. In this order, on the box in <code>/root/cicatrixa-platform</code>:</p>
+    <pre class="term"><span class="c"># 1. import: see what it would do, then do it</span>
+docker exec cx-control python -m app.import_online --dry-run
+docker exec cx-control python -m app.import_online
+<span class="c"># 2. Cloudflare DNS: move app and * to the box (or the tunnel), remove app from Vercel</span>
+<span class="c"># 3. verify, while no customer app runs yet</span>
+VERIFY_ALLOW_RESTART=1 ./verify-public.sh
+<span class="c"># 4. restart: imported projects start deploying</span>
+docker restart cx-control
+<span class="c"># 5. email everyone whose projects are deploying</span>
+docker exec cx-control python -m app.import_online --notify</pre>
+    <p class="muted small">Leave out step 5 and nobody hears that deploying opened. The steps
+      around these — the box, <code>platform/.env</code>, Vercel's domain — are in
+      <code>docs/RUNBOOK.md</code>, section “Leaving Vercel”.</p>
   </div>
 </div>
 </div></main>

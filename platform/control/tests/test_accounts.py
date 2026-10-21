@@ -511,6 +511,24 @@ def test_a_link_started_by_someone_else_binds_nothing(client, monkeypatch):
     assert "error=" in r.headers["location"] and connections(777) == []
 
 
+def test_an_install_request_waiting_for_an_organisations_owners_binds_nothing(
+        client, monkeypatch):
+    """GitHub sends a member who asked their organisation back with setup_action=request
+    and no installation. The code would show their own free installation; that is not
+    what they asked for, so nothing is bound, with or without a state."""
+    uid = make_user()
+    monkeypatch.setattr(gh, "installations_user_controls",
+                        lambda code: {5: {"created_at": "2026-01-01T00:00:00Z"}})
+    signed_in(client, uid)
+    for params in ({"code": "abc", "setup_action": "request"},
+                   {"setup_action": "request"}):
+        for r in (callback(client, uid, **params), callback(client, **params)):
+            location = r.headers["location"]
+            assert location.startswith("/connect/github?error=")
+            assert "organisation%27s+owners" in location
+    assert connections(5) == []
+
+
 def test_signed_out_callbacks_go_to_login(client):
     r = callback(client, installation_id=777, code="abc")
     assert r.headers["location"].startswith("/login")

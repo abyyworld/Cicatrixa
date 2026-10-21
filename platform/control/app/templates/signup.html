@@ -12,6 +12,14 @@
   </div>
   {% endif %}
   {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if waiting %}
+  <div class="card" id="signups-wait">
+    <p class="mono" style="margin:0 0 8px">Sign-ups open shortly.</p>
+    <p class="muted" style="margin:0">Cicatrixa is moving to its own servers, and the accounts
+      made so far come over first. If you already have one, you can log in with it once the
+      move is done.</p>
+  </div>
+  {% else %}
   <form method="post" action="/signup" class="card">
     {% if ref_code %}<input type="hidden" name="ref_code" value="{{ ref_code }}">{% endif %}
     <label>email</label>
@@ -20,6 +28,7 @@
     <input type="password" name="password" minlength="8" required autocomplete="new-password">
     <div style="margin-top:20px"><button class="btn" style="width:100%">Start free trial →</button></div>
   </form>
+  {% endif %}
   <p class="muted mono" style="font-size:13px;margin-top:16px">
     Already have an account? <a href="/login">Log in</a></p>
 </div>

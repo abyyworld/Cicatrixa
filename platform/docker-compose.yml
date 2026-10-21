@@ -101,7 +101,8 @@ services:
       - MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@cicatrixa.com>}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-      # Read only by `python -m app.import_online` (docs/RUNBOOK.md, "Leaving Vercel").
+      # For `python -m app.import_online` (docs/RUNBOOK.md, "Leaving Vercel"). While the
+      # URL is set and no import has committed, sign-ups wait for the online accounts.
       - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
       - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}

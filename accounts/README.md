@@ -51,11 +51,16 @@ one, a single command moves everyone over and the planned projects deploy on the
 
 4. **Vercel → Settings → Domains:** `app.cicatrixa.com` is listed; in Cloudflare DNS, `app` is a
    CNAME to Vercel (DNS only).
-5. **The GitHub App** — once, after deploying: log in with an admin address (confirmed by its
-   emailed link) → **Admin** → **Create the GitHub App** → GitHub asks you to confirm → done. Its
-   keys are stored in Turso (`cx_setting`), the secret ones encrypted with `BETTER_AUTH_SECRET`.
-   This is the very App the platform uses later, at the same URLs, so nobody reconnects. If the
-   name "Cicatrixa" is taken on GitHub, type another in the form.
+5. **Become admin** — once: log in with an `ADMIN_EMAILS` address → **Admin** → **Confirm it's
+   you** → open the emailed link and set your password. A confirmed address alone is not enough:
+   anyone can sign up with your address first and get you to click its confirmation link, so admin
+   also needs a password set through an emailed reset link (`cx_setting` row `pw_proof:<userId>`,
+   written by `onPasswordReset`).
+6. **The GitHub App** — once: **Admin** → **Create the GitHub App** → GitHub asks you to confirm →
+   done. Its keys are stored in Turso (`cx_setting`), the secret ones encrypted with
+   `BETTER_AUTH_SECRET`. This is the very App the platform uses later, at the same URLs, so nobody
+   reconnects. If the name "Cicatrixa" is taken on GitHub, type another in the form. Until this
+   step, the Connect page says GitHub connections open shortly.
 
 Without `RESEND_API_KEY`, accounts still work, but unconfirmed, and nobody is admin.
 
@@ -103,7 +108,12 @@ console.log(await (await getMigrations(authOptions(env, client))).compileMigrati
 
 ## Moving to a real server
 
-docs/RUNBOOK.md, **"Leaving Vercel"**: put the Turso URL, token and `BETTER_AUTH_SECRET` in the
-box's `platform/.env`, then `docker exec cx-control python -m app.import_online` brings every
-account (Better Auth password hashes are accepted as they are), the GitHub App, every connection
-and every planned project; restarting cx-control deploys them. Then `app` moves to the box.
+docs/RUNBOOK.md, **"Leaving Vercel"**, step by step. In short: the box's `platform/.env` gets
+the Turso URL and token and `BETTER_AUTH_SECRET` (to read this database) plus `RESEND_API_KEY`,
+`MAIL_FROM`, `OPENAI_API_KEY`, `AI_MODEL` and `ADMIN_EMAILS` (to keep what people had here);
+`docker exec cx-control python -m app.import_online` brings every account (Better Auth password
+hashes are accepted as they are), the GitHub App, every connection and every planned project;
+`app` and `*` move to the box; restarting cx-control deploys the projects within the box's
+quotas; `import_online --notify` emails their owners. Until the import has run, the box refuses
+sign-ups, and it never merges an online account into an existing box account unless told to
+(`--link-existing`).

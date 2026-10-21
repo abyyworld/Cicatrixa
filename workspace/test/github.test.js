@@ -161,12 +161,16 @@ test("nothing is ever sent without a credential", async () => {
 });
 
 test("branch head, tree and files are read through the API", async () => {
-  on("GET", "https://api.github.com/repos/ada/app/commits/feature%2Fx", () => jsonRes({ sha: "f".repeat(40) }));
+  on("GET", "https://api.github.com/repos/ada/app/commits/feature%2Fx", (call) => {
+    // The bare SHA: GitHub computes no diff for it.
+    assert.equal(call.headers.get("accept"), "application/vnd.github.sha");
+    return new Response(`${"f".repeat(40)}\n`);
+  });
   on("GET", `https://api.github.com/repos/ada/app/git/trees/${"f".repeat(40)}`, (call) => {
     assert.equal(call.url.searchParams.get("recursive"), "1");
     return jsonRes({ truncated: false, tree: [
-      { path: "src", type: "tree" }, { path: "src/index.js", type: "blob" },
-      { path: "package.json", type: "blob" }, { path: "vendor/lib", type: "commit" }] });
+      { path: "src", type: "tree" }, { path: "src/index.js", type: "blob", size: 18 },
+      { path: "package.json", type: "blob", size: 2_000_000 }, { path: "vendor/lib", type: "commit" }] });
   });
   on("GET", "https://api.github.com/repos/ada/app/contents/src/index.js", (call) => {
     assert.equal(call.headers.get("accept"), "application/vnd.github.raw+json");
@@ -176,10 +180,55 @@ test("branch head, tree and files are read through the API", async () => {
   assert.equal(await gh.branchHead("ghs_1", "ada/app", "feature/x"), "f".repeat(40));
   await assert.rejects(gh.branchHead("ghs_1", "ada/app", "nope"), /branch nope not found/);
   assert.deepEqual(await gh.getTree("ghs_1", "ada/app", "f".repeat(40)),
-                   { paths: ["src/index.js", "package.json"], truncated: false });
+                   { paths: ["src/index.js", "package.json"], truncated: false,
+                     sizes: new Map([["src/index.js", 18], ["package.json", 2_000_000]]) });
   assert.equal(await gh.readFile("ghs_1", "ada/app", "src/index.js", "f".repeat(40)),
                "console.log('hi')\n");
   assert.equal(await gh.readFile("ghs_1", "ada/app", "missing.txt", "main"), null);
+});
+
+test("a branch that is not there, an empty repo, and an answer that is no SHA", async () => {
+  on("GET", /\/repos\/ada\/app\/commits\/(gone|typo|empty|odd)$/, (call) => {
+    const name = call.url.pathname.split("/").pop();
+    if (name === "gone") return jsonRes({ message: "Not Found" }, 404);
+    if (name === "typo") return jsonRes({ message: "No commit found for SHA: typo" }, 422);
+    if (name === "empty") return jsonRes({ message: "Git Repository is empty." }, 409);
+    return new Response("<html>not a sha</html>");
+  });
+  await assert.rejects(gh.branchHead("ghs_1", "ada/app", "gone"), /branch gone not found/);
+  await assert.rejects(gh.branchHead("ghs_1", "ada/app", "typo"),
+                       (err) => err.status === 404 && /branch typo not found/.test(err.message));
+  await assert.rejects(gh.branchHead("ghs_1", "ada/app", "empty"),
+                       (err) => err.status === 409 && /ada\/app is empty/.test(err.message));
+  await assert.rejects(gh.branchHead("ghs_1", "ada/app", "odd"), /GitHub gave no commit/);
+});
+
+test("a file over 1 MB is refused, and never held whole", async () => {
+  const MB = 1024 * 1024;
+  assert.equal(gh.MAX_FILE_BYTES, MB);
+  let pulled = 0;
+  on("GET", "https://api.github.com/repos/ada/app/contents/big.txt", () =>
+    new Response("x".repeat(MB + 1), { headers: { "content-length": String(MB + 1) } }));
+  on("GET", "https://api.github.com/repos/ada/app/contents/streamed.txt", () =>
+    // No Content-Length: 100 MB in 64 KB chunks, counted as they come.
+    new Response(new ReadableStream({
+      pull(ctl) {
+        if (pulled++ >= 1600) ctl.close(); else ctl.enqueue(new Uint8Array(64 * 1024).fill(0x61));
+      } })));
+  on("GET", "https://api.github.com/repos/ada/app/contents/exact.txt", () =>
+    new Response(new ReadableStream({
+      start(ctl) {
+        ctl.enqueue(new TextEncoder().encode(`\ufeff${"é".repeat(MB / 2 - 2)}`));
+        ctl.close();
+      } })));
+  await assert.rejects(gh.readFile("ghs_1", "ada/app", "big.txt", "main"),
+                       (err) => err.status === 413 && /over 1 MB/.test(err.message));
+  await assert.rejects(gh.readFile("ghs_1", "ada/app", "streamed.txt", "main"),
+                       (err) => err.status === 413);
+  assert.ok(pulled < 40, `stopped reading after ${pulled} chunks`);
+  // Up to the cap is read, decoded as res.text() would (the byte-order mark dropped).
+  const exact = await gh.readFile("ghs_1", "ada/app", "exact.txt", "main");
+  assert.equal(exact, "é".repeat(MB / 2 - 2));
 });
 
 test("a file path from the model cannot climb out of the repo", async () => {

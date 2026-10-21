@@ -13,6 +13,10 @@ import { createHmac, createSign, timingSafeEqual } from "node:crypto";
 const API = "https://api.github.com";
 const TIMEOUT_MS = 15_000;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+// The largest repo file the analysis reads. GitHub's raw media type serves up to 100 MB,
+// and an analysis reads up to two dozen key files at once in a function that shares its
+// memory with other people's requests; the plan only ever uses the first 8000 characters.
+export const MAX_FILE_BYTES = 1024 * 1024;
 
 export class GitHubError extends Error {
   constructor(message, status) {
@@ -27,8 +31,36 @@ function headers(auth, accept = "application/vnd.github+json") {
   return h;
 }
 
+// The body as text, refused (413) past maxBytes: by its Content-Length before anything
+// is read, and by counting when GitHub sends none, so no more than that is ever held.
+async function cappedText(res, maxBytes, what) {
+  const tooBig = () => new GitHubError(`${what} is over ${Math.round(maxBytes / 1024 / 1024)} MB`,
+                                       413);
+  if (Number(res.headers.get("content-length")) > maxBytes) {
+    await res.body?.cancel().catch(() => {});
+    throw tooBig();
+  }
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  // As res.text() decodes: UTF-8, a leading byte-order mark dropped.
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
 // One request to api.github.com. Errors name the endpoint and status, never a token.
-async function call(method, path, auth, { accept, body, params, raw = false } = {}) {
+// raw: the body as text (at most maxBytes when given) instead of JSON.
+async function call(method, path, auth, { accept, body, params, raw = false, maxBytes } = {}) {
   if (!auth) throw new GitHubError("no GitHub credential for this request", 0);
   const url = new URL(API + path);
   for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, String(v));
@@ -50,6 +82,7 @@ async function call(method, path, auth, { accept, body, params, raw = false } = 
                           (why ? `: ${String(why).slice(0, 200)}` : ""), res.status);
   }
   if (res.status === 204) return null;
+  if (raw && maxBytes) return cappedText(res, maxBytes, url.pathname);
   return raw ? res.text() : res.json();
 }
 
@@ -183,30 +216,47 @@ export async function repoInfo(token, full) {
   }
 }
 
+// The commit a branch points at. The sha media type makes GitHub answer the bare SHA and
+// compute no diff: the JSON commit carries its stats, and a head commit too big to diff
+// fails with a 422 that would read as "branch not found". With it, 404 and 422 ("No
+// commit found") both mean the branch does not exist; 409 is a repository with no commits.
 export async function branchHead(token, full, branch) {
+  let text;
   try {
-    const r = await call("GET", `/repos/${checkRepo(full)}/commits/${encodeURIComponent(branch)}`,
-                         token, { params: { per_page: 1 } });
-    if (!r?.sha) throw new GitHubError(`${full}@${branch}: no commit`, 404);
-    return r.sha;
+    text = await call("GET", `/repos/${checkRepo(full)}/commits/${encodeURIComponent(branch)}`,
+                      token, { accept: "application/vnd.github.sha", raw: true, maxBytes: 1024 });
   } catch (err) {
     if (err.status === 404 || err.status === 422) {
       throw new GitHubError(`${full}: branch ${branch} not found`, 404);
     }
+    if (err.status === 409) {
+      throw new GitHubError(`${full} is empty: push a first commit, then run the analysis again`,
+                            409);
+    }
     throw err;
   }
+  const sha = String(text || "").trim();
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sha)) {
+    throw new GitHubError(`${full}@${branch}: GitHub gave no commit`, 502);
+  }
+  return sha;
 }
 
+// Every blob's path, and its size in bytes where GitHub gives one, so the analysis can
+// pass over files too big to read (MAX_FILE_BYTES) without asking for them.
 export async function getTree(token, full, sha) {
   const r = await call("GET", `/repos/${checkRepo(full)}/git/trees/${encodeURIComponent(sha)}`,
                        token, { params: { recursive: 1 } });
-  return { paths: (r?.tree || []).filter((e) => e.type === "blob").map((e) => e.path),
-           truncated: Boolean(r?.truncated) };
+  const blobs = (r?.tree || []).filter((e) => e.type === "blob");
+  const sizes = new Map();
+  for (const e of blobs) if (Number.isFinite(e.size)) sizes.set(e.path, e.size);
+  return { paths: blobs.map((e) => e.path), sizes, truncated: Boolean(r?.truncated) };
 }
 
 // A file's text, or null when it does not exist. The path may come from the model
 // (need_files), so it is confined to the repo: no "..", ".", empty or absolute parts
-// (fetch would resolve "../.." into another API endpoint).
+// (fetch would resolve "../.." into another API endpoint). A file over MAX_FILE_BYTES
+// is refused with a GitHubError of status 413, and never held whole.
 export async function readFile(token, full, path, ref) {
   const parts = String(path).replace(/^\.\/+/, "").split("/");
   if (!parts.length || parts.some((p) => !p || p === "." || p === ".." || p.includes("\\"))) {
@@ -215,7 +265,7 @@ export async function readFile(token, full, path, ref) {
   try {
     return await call("GET", `/repos/${checkRepo(full)}/contents/${parts.map(encodeURIComponent)
       .join("/")}`, token, { accept: "application/vnd.github.raw+json", raw: true,
-                             params: ref ? { ref } : {} });
+                             maxBytes: MAX_FILE_BYTES, params: ref ? { ref } : {} });
   } catch (err) {
     if (err.status === 404) return null;
     throw err;

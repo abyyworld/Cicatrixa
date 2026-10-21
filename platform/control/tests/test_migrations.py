@@ -60,8 +60,12 @@ def test_online_import_ids_are_unique_but_optional(fresh_db):
 def test_migration_3_rolls_back_to_2_alone(fresh_db):
     db.q("INSERT INTO users(email,pw_hash,created_at,external_id) VALUES(?,?,?,?)",
          ("a@example.com", "h", db.now(), "u-1"))
+    db.q("INSERT INTO imported_project(external_id,imported_at) VALUES('p-1',?)", (db.now(),))
+    assert "notified_at" in _cols("projects")
     assert db.migrate_down(2) == 2
     assert "external_id" not in _cols("users")
+    assert "notified_at" not in _cols("projects") and "external_id" not in _cols("projects")
+    assert db.one("SELECT name FROM sqlite_master WHERE name='imported_project'") is None
     assert db.one("SELECT email FROM users")["email"] == "a@example.com"   # rows survive
     assert db.one("SELECT name FROM sqlite_master WHERE name='transform'") is not None
     assert db.migrate() == _head()

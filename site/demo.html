@@ -74,6 +74,11 @@
   .honest .row{margin-top:20px}
   .honest .btn{white-space:normal;line-height:1.5}
 
+  /* Dashboard, Log in and Sign up do not fit beside the wordmark on a phone. Log in goes:
+     Dashboard takes a signed-out visitor to the login page anyway. */
+  .nav a{white-space:nowrap}
+  @media (max-width:420px){.nav a.lnk.login{display:none}}
+
   footer.foot{border-top:1px solid var(--line);padding:24px 0 40px;font-size:12.5px;color:var(--muted)}
   footer.foot a{color:var(--muted);text-decoration:none}
   footer.foot a:hover{color:var(--healed)}
@@ -96,7 +101,8 @@
   <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
     <span><span class="r">cica</span><span class="g">trixa</span></span></a>
   <span class="spacer"></span>
-  <a class="lnk" href="/login">Log in</a>
+  <a class="lnk" href="/dashboard">Dashboard</a>
+  <a class="lnk login" href="/login">Log in</a>
   <a class="btn sm" href="/signup">Sign up</a>
 </div></header>
 <main><div class="wrap">
@@ -222,11 +228,13 @@ def test_create_order_all_discount_yields_zero_total() -&gt; None:
     recording, so they are not shown; every event and every line of code above is copied
     from the screen.</p>
   <p>Hosting your own repos opens when our build servers do. Until then nothing of yours is
-    built or run — but Cicatrixa already reads your repo, works out how to run it and writes
-    the Dockerfile.</p>
+    built or run — but once you connect GitHub, Cicatrixa reads your repo, works out how to run
+    it and writes the Dockerfile, ready for that day.</p>
+  <p>Sign up — or open your dashboard — to have your repo planned as soon as you connect
+    GitHub.</p>
   <div class="row">
-    <a class="btn" href="/signup">Sign up and connect GitHub to have your repo analysed today →</a>
-    <a class="small" href="/login">Already have an account? Log in</a>
+    <a class="btn" href="/signup">Sign up →</a>
+    <a class="small" href="/dashboard">Open your dashboard →</a>
   </div>
 </section>
 

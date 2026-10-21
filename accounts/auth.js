@@ -9,6 +9,7 @@ import { createClient } from "@libsql/client";
 import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { betterAuth } from "better-auth";
 
+import { recordPasswordProof } from "../workspace/store.js";
 import { mailOn, sendResetPasswordEmail, sendVerificationEmail } from "./email.js";
 
 const SITE_ORIGINS = [
@@ -54,6 +55,19 @@ export function authOptions(env = process.env, client = databaseClient(env)) {
       // A reset is how someone takes an account back: end every other session.
       revokeSessionsOnPasswordReset: true,
       sendResetPassword: ({ user, url }) => sendResetPasswordEmail(env, user.email, url),
+      // The password was just chosen by someone holding an emailed link: the proof an
+      // ADMIN_EMAILS address needs before it is an admin (workspace/routes.js
+      // adminStatus). A confirmation link is not enough, because whoever signed up chose
+      // that password. Better Auth calls this after storing the new password and before
+      // ending the old sessions, so it must not throw: a failed write only means the
+      // person claims again.
+      onPasswordReset: async ({ user }) => {
+        try {
+          await recordPasswordProof(client, user.id);
+        } catch (err) {
+          console.error("accounts: could not record a password reset:", err?.message || err);
+        }
+      },
     },
     emailVerification: {
       sendOnSignUp: verify,

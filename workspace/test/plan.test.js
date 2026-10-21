@@ -49,8 +49,10 @@ function listFiles(dir, prefix = "") {
   return out;
 }
 
-// workspace/github.js's shape, served from a directory.
-function fixtureGh(dir, { truncated = false, hide = [], calls = [] } = {}) {
+// workspace/github.js's shape, served from a directory. `sizes` is what the tree
+// reports ({path: bytes}); `refuse` lists paths readFile refuses as over the cap (413),
+// as github.js does for a file whose size the tree did not give.
+function fixtureGh(dir, { truncated = false, hide = [], calls = [], sizes, refuse = [] } = {}) {
   return {
     async repoInfo(token, full) {
       calls.push(["repoInfo", full]);
@@ -62,10 +64,13 @@ function fixtureGh(dir, { truncated = false, hide = [], calls = [] } = {}) {
     },
     async getTree(token, full, sha) {
       calls.push(["getTree", full, sha]);
-      return { paths: listFiles(dir).filter((p) => !hide.includes(p)), truncated };
+      const paths = listFiles(dir).filter((p) => !hide.includes(p));
+      return sizes ? { paths, truncated, sizes: new Map(Object.entries(sizes)) }
+        : { paths, truncated };
     },
     async readFile(token, full, path, ref) {
       calls.push(["readFile", path, ref]);
+      if (refuse.includes(path)) throw Object.assign(new Error(`${path} is over 1 MB`), { status: 413 });
       const p = join(dir, ...path.split("/"));
       try {
         if (!statSync(p).isFile()) return null;
@@ -810,6 +815,45 @@ test("analyze: what the model may read stays inside the repo", async () => {
   assert.match(bodies[1].input, /--- a\/b\/b.txt ---\nbee\nline2\n/);   // CRLF as the platform reads it
   assert.deepEqual(log.filter((l) => l.includes("🔎")),
                    ["  🔎 AI reading a/b/b.txt", "  🔎 AI reading /a/a.txt", "  🔎 AI reading a/b/../../root.txt"]);
+});
+
+// Not in D: the parity runs (fixed when the file loads) cover what the platform does,
+// and it reads files of any size.
+const BIG = writeRepo("big", {
+  "package.json": pkg({ scripts: { start: "node server.js" } }), "README.md": "huge\n",
+  "index.html": "<p>huge</p>\n", "server.js": "require('http')\n", "docs/huge.txt": "huge\n",
+  "docs/small.txt": "small\n",
+});
+
+test("analyze: files over 1 MB are not read, and the log says so", async () => {
+  const calls = [];
+  const log = [];
+  const { fetchImpl, bodies } = fakeOpenAI([
+    JSON.stringify({ need_files: ["docs/huge.txt", "docs/small.txt", "index.html"] }), '{"port": 3000}']);
+  // README.md and docs/huge.txt are too big by the tree; index.html has no size there,
+  // and readFile refuses it.
+  const gh = fixtureGh(BIG, { calls, refuse: ["index.html"],
+                                sizes: { "README.md": 5_000_000, "docs/huge.txt": 1024 * 1024 + 1,
+                                         "package.json": 1024 * 1024, "server.js": 20 } });
+  const r = await analyze({ token: "t", repoFull: "acme/big", branch: "main", gh,
+                            env: { OPENAI_API_KEY: "sk" }, fetchImpl, log: (l) => log.push(l) });
+  const read = calls.filter((c) => c[0] === "readFile").map((c) => c[1]);
+  assert.ok(!read.includes("README.md") && !read.includes("docs/huge.txt"), read.join());
+  assert.ok(read.includes("package.json"), "exactly 1 MB is read");
+  assert.deepEqual(log.filter((l) => l.includes("skipped")), [
+    "  skipped README.md (over 1 MB)", "  skipped index.html (over 1 MB)",
+    "  skipped docs/huge.txt (over 1 MB)", "  skipped index.html (over 1 MB)"]);
+  // What was not read is not sent, and a file asked for is "(not found)".
+  assert.ok(!bodies[0].input.includes("--- README.md ---"));
+  assert.ok(!bodies[0].input.includes("--- index.html ---"));
+  assert.ok(bodies[0].input.includes("--- server.js ---\nrequire('http')\n"));
+  assert.match(bodies[1].input, /--- docs\/huge.txt ---\n\(not found\)\n--- docs\/small.txt ---\nsmall\n/);
+  assert.equal(r.plan.port, 3000);
+  // Without the AI the heuristics still see the files are there.
+  const h = await analyze({ token: "t", repoFull: "acme/big", branch: "main", env: {},
+                            gh: fixtureGh(BIG, { sizes: { "package.json": 5_000_000 } }) });
+  assert.equal(h.plan.notes, "heuristic: node app");
+  assert.match(h.plan.dockerfile, /CMD \["node","index.js"\]/, "package.json was not read");
 });
 
 test("analyze: GitHub failures fail the analysis", async () => {

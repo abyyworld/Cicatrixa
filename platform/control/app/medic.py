@@ -46,10 +46,8 @@ def _ensure_workdir(service, connection) -> str | None:
     if os.path.isdir(os.path.join(workdir, ".git")) or os.path.isdir(workdir):
         return workdir
     try:
-        url = gh.clone_url(connection, service["repo_full"])
-        r = subprocess.run(["git", "clone", "--depth", "1", "--branch",
-                            service["branch"], url, workdir],
-                           capture_output=True, text=True, timeout=300)
+        r = engine.clone_repo(gh.clone_url(connection, service["repo_full"]),
+                              service["branch"], workdir)
         return workdir if r.returncode == 0 else None
     except Exception:
         return None
@@ -107,8 +105,8 @@ def investigate_sync(project_id: int, user_text: str):
             workdir, rest = next(iter(workdirs.values())), path
         if not workdir or not rest:
             return None
-        full = os.path.realpath(os.path.join(workdir, rest.lstrip("/")))
-        if not full.startswith(os.path.realpath(workdir) + os.sep):
+        full = engine.inside_checkout(workdir, rest)
+        if full is None:
             return None
         try:
             return open(full, errors="replace").read(8000)
@@ -188,8 +186,8 @@ def _verify_patches(patches: list[dict], service, workdirs: dict) -> list[dict]:
         for pre in (f"{service['name']}/", f"{service['slug']}/"):
             if rel.startswith(pre):
                 rel = rel[len(pre):]
-        full = os.path.realpath(os.path.join(workdir, rel))
-        if not full.startswith(os.path.realpath(workdir) + os.sep):
+        full = engine.inside_checkout(workdir, rel)
+        if full is None:
             continue
         try:
             src = open(full, errors="replace").read()
@@ -259,10 +257,12 @@ def _deliver(clone, service, connection, sha, msg_line, verification,
     old behaviour and say so.
     """
     repo, branch = service["repo_full"], service["branch"]
+    # The clone's origin carries no token (engine.clone_repo): each push is handed one.
+    _url, git_env = engine.split_credentials(gh.clone_url(connection, repo))
 
     def push(refspec: str) -> str | None:
         r = subprocess.run(["git", "-C", clone, "push", "origin", refspec],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=120, env=git_env)
         return None if r.returncode == 0 else (r.stderr or r.stdout).strip()[-400:]
 
     if flywheel.pr_mode_enabled(service):
@@ -396,8 +396,7 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
     url = gh.clone_url(connection, service["repo_full"])
     try:
         status(f"⇣ cloning {service['repo_full']}@{service['branch']} for the fix…")
-        r = subprocess.run(["git", "clone", "--branch", service["branch"], url, clone],
-                           capture_output=True, text=True, timeout=300)
+        r = engine.clone_repo(url, service["branch"], clone, depth=None)
         if r.returncode != 0:
             return None, f"Clone failed: {r.stderr.strip()[-300:]}"
 
@@ -409,8 +408,10 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             for pre in (f"{service['name']}/", f"{service['slug']}/"):
                 if rel.startswith(pre) and not os.path.exists(os.path.join(clone, rel)):
                     rel = rel[len(pre):]
-            full = os.path.realpath(os.path.join(clone, rel))
-            if not full.startswith(os.path.realpath(clone) + os.sep):
+            # Never into .git: git runs here next (add, commit, push), and its
+            # config and hooks would run whatever a patch put there.
+            full = engine.inside_checkout(clone, rel)
+            if full is None:
                 continue
             try:
                 src = open(full, errors="replace").read()

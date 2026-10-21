@@ -37,6 +37,10 @@
     <p class="muted">One click. GitHub's own repo picker lets you grant access to exactly the
       repositories you choose. Cicatrixa reads them to plan each deploy, and the same
       installation carries over when deploying opens — nothing to reconnect.</p>
+    <p class="muted small" id="perms">GitHub will ask for read &amp; write access to code and pull
+      requests, and read access to organisation members (how Cicatrixa checks you administer an
+      organisation). Online, Cicatrixa only reads your code; write is for pushing verified fixes
+      once deploying opens.</p>
     <a class="btn" href="/connect/github/start" target="_blank" id="install-btn">Install &amp; choose repos →</a>
     <p class="muted small" id="authorize-line">Already installed the app on GitHub?
       <a href="/connect/github/authorize">Connect it →</a></p>
@@ -47,7 +51,7 @@
       <br><a href="/projects/new">Already done? Go to projects →</a>
     </div>
     <div id="change-hint" class="hint" hidden>
-      GitHub opened in a new tab. Change which repositories Cicatrixa can read there, click
+      GitHub opened in a new tab. Change which repositories Cicatrixa can access there, click
       <strong>Save</strong>, and <strong>come back to this tab</strong>; you'll be taken to the
       project page automatically.
     </div>
@@ -58,6 +62,9 @@
     <p class="muted" id="noapp-admin" hidden>Not enabled yet — you're an admin: set it up in one
       click from the <a href="/admin">admin page</a> and this card becomes a one-click install
       for everyone.</p>
+    <p class="muted" id="noapp-pending" hidden>Not enabled yet — your address is on the admin
+      list: confirm it's you on the <a href="/admin">admin page</a>, then set it up there in one
+      click and this card becomes a one-click install for everyone.</p>
     <p class="muted" id="noapp-user" hidden>GitHub connections open shortly. Check back soon —
       your account is ready for them.</p>
   </div>

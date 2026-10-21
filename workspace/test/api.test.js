@@ -143,8 +143,11 @@ async function github(method, url, headers, body) {
     if (!rest) return jsonRes({ full_name: m[1], default_branch: r.default_branch, private: r.private });
     let n;
     if ((n = rest.match(/^\/commits\/(.+)$/))) {
+      if (headers.get("accept") !== "application/vnd.github.sha") {
+        unexpected.push(`commit asked for with its diff: ${url}`);
+      }
       const head = r.branches[decodeURIComponent(n[1])];
-      return head ? jsonRes({ sha: head }) : jsonRes({ message: "No commit found for SHA" }, 422);
+      return head ? new Response(head) : jsonRes({ message: "No commit found for SHA" }, 422);
     }
     if ((n = rest.match(/^\/git\/trees\/(.+)$/))) {
       if (world.gate) await world.gate;
@@ -207,6 +210,7 @@ globalThis.fetch = async (input, init = {}) => {
 
 const auth = await import("../../api/auth.js");
 const ws = await import("../../api/workspace.js");
+const { ERROR_CODES } = await import("../routes.js");
 const { buildManifest } = await import("../github.js");
 const { readState, signState, decryptSetting } = await import("../secrets.js");
 
@@ -283,6 +287,27 @@ async function user(email) {
 
 const ndjson = async (res) => (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
 const query = (location) => Object.fromEntries(new URL(location, BASE).searchParams);
+// The ?error= a page is sent back with: always one of the fixed codes, never a sentence.
+const errorOf = (location) => {
+  const code = query(location).error;
+  assert.ok(ERROR_CODES.includes(code), `not an error code: ${code}`);
+  return code;
+};
+
+// Follows the reset link in `mail` and sets `password`; the old sessions end with it,
+// so `c` signs in again with the new one.
+async function resetFromMail(c, mail, password) {
+  assert.equal(mail.subject, "Reset your Cicatrixa password");
+  const landing = await c.authCall("GET", linkIn(mail).replace(BASE, ""));
+  assert.equal(landing.status, 302);
+  const target = new URL(landing.headers.get("location"));
+  assert.equal(target.pathname, "/reset-password");
+  const r = await c.authCall("POST", "/reset-password",
+                             { newPassword: password, token: target.searchParams.get("token") });
+  assert.equal(r.status, 200);
+  const again = await c.authCall("POST", "/sign-in/email", { email: c.email, password });
+  assert.equal(again.status, 200);
+}
 
 // GitHub sends the person back to the callback.
 const callback = (c, params) => c.page(`/connect/github/callback?${new URLSearchParams(params)}`);
@@ -320,15 +345,15 @@ test("before the App is created: nothing to connect, and webhooks are not truste
   const me = await ada.get("me");
   assert.equal(me.status, 200);
   assert.deepEqual(me.data, {
-    user: { id: ada.id, email: "ada@example.com", name: "ada", isAdmin: false },
+    user: { id: ada.id, email: "ada@example.com", name: "ada", isAdmin: false, adminPending: false },
     github: null, app: { configured: false, slug: null }, aiOn: false, mailOn: true,
     baseDomain: "cicatrixa.com", limits: { services: 5, analysesPerDay: 20 },
     usage: { services: 0, analysesToday: 0 } });
   assert.equal((await ada.get("repos")).status, 503);
   const start = await ada.page("/connect/github/start");
   assert.equal(new URL(start.location, BASE).pathname, "/connect/github");
-  assert.match(query(start.location).error, /not set up yet/);
-  assert.match(query((await ada.page("/connect/github/authorize")).location).error, /not set up yet/);
+  assert.equal(errorOf(start.location), "app_missing");
+  assert.equal(errorOf((await ada.page("/connect/github/authorize")).location), "app_missing");
   const body = '{"action":"deleted","installation":{"id":1}}';
   const r = await client().raw("POST", "/api/webhooks/github", body, { headers: {
     "x-github-event": "installation",
@@ -336,18 +361,65 @@ test("before the App is created: nothing to connect, and webhooks are not truste
   assert.equal(r.status, 401);
 });
 
-test("admin endpoints refuse everyone but a verified admin address", async () => {
+test("an admin address is an admin only once its password was set through an emailed link",
+  async () => {
+    // Confirmed, but the password is whoever signed up's: pending, and no admin yet.
+    const pending = (await boss.get("me")).data.user;
+    assert.equal(pending.isAdmin, false);
+    assert.equal(pending.adminPending, true);
+    assert.equal((await boss.get("admin")).status, 403);
+    assert.equal((await boss.post("admin/github-app", {})).status, 403);
+    // Only an admin address can claim.
+    assert.equal((await ada.post("admin/claim", {})).status, 403);
+    assert.equal((await ada.post("admin/claim", {}, { origin: "https://evil.example" })).status, 403);
+
+    for (const c of [boss, chief]) {
+      const before = outbox.length;
+      const r = await c.post("admin/claim", {});
+      assert.equal(r.status, 200);
+      assert.deepEqual(r.data, { ok: true });
+      assert.equal(outbox.length, before + 1);
+      assert.deepEqual(outbox.at(-1).to, [c.email]);              // the account's own address
+      const oldSession = new Map(c.jar);
+      await resetFromMail(c, outbox.at(-1), "a password chosen from the link");
+      // The reset ended the session the claim was made from.
+      const stale = client();
+      for (const [k, v] of oldSession) stale.jar.set(k, v);
+      assert.equal((await stale.get("me")).status, 401);
+      const me = (await c.get("me")).data.user;
+      assert.equal(me.isAdmin, true);
+      assert.equal(me.adminPending, false);
+    }
+    const [proof] = await rows("select value from cx_setting where key = ?", [`pw_proof:${boss.id}`]);
+    assert.match(proof.value, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/);
+    assert.equal((await boss.post("admin/claim", {})).status, 409);
+    // A proof is no App setting.
+    const { getSettings } = await import("../store.js");
+    assert.deepEqual(Object.keys(await getSettings(db, SECRET)), []);
+  });
+
+test("admin endpoints refuse everyone but a proven admin address", async () => {
   assert.equal((await boss.get("me")).data.user.isAdmin, true);
   assert.equal((await ada.get("admin")).status, 403);
   assert.equal((await ada.post("admin/github-app", {})).status, 403);
-  // An admin's address that was never confirmed is not an admin.
+  // A reset everyone can do: a proof on an address that is not an admin's is nothing.
+  await db.execute({ sql: "insert into cx_setting (key, value, updatedAt) values (?, ?, ?)",
+                     args: [`pw_proof:${ada.id}`, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"] });
+  assert.deepEqual((await ada.get("me")).data.user, { id: ada.id, email: "ada@example.com",
+    name: "ada", isAdmin: false, adminPending: false });
+  // An admin's address that was never confirmed is not an admin, proof or not.
   await db.execute({ sql: `update "user" set emailVerified = 0 where id = ?`, args: [sleepy.id] });
-  assert.equal((await sleepy.get("me")).data.user.isAdmin, false);
+  await db.execute({ sql: "insert into cx_setting (key, value, updatedAt) values (?, ?, ?)",
+                     args: [`pw_proof:${sleepy.id}`, "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"] });
+  const sleepyMe = (await sleepy.get("me")).data.user;
+  assert.equal(sleepyMe.isAdmin, false);
+  assert.equal(sleepyMe.adminPending, false);
   assert.equal((await sleepy.get("admin")).status, 403);
   assert.equal((await sleepy.post("admin/github-app", {})).status, 403);
+  assert.equal((await sleepy.post("admin/claim", {})).status, 403);
   const cb = await sleepy.page(`/admin/github/callback?code=mcode-1&state=${
     encodeURIComponent(signState(SECRET, `ghapp:${sleepy.id}`))}`);
-  assert.match(query(cb.location).error, /Only an admin/);
+  assert.equal(errorOf(cb.location), "admin_only");
   assert.equal(world.conversions, 0);
   const ok = await boss.get("admin");
   assert.equal(ok.status, 200);
@@ -356,6 +428,48 @@ test("admin endpoints refuse everyone but a verified admin address", async () =>
   assert.equal(ok.data.counts.verifiedUsers, 10);
   assert.equal(ok.data.aiOn, false);
   assert.equal(ok.data.mailOn, true);
+});
+
+// The pre-registration attack: someone signs up with an admin's address and their own
+// password, and the inbox's owner clicks the genuine confirmation link once.
+test("a squatter on an admin address never becomes admin; the inbox's owner does", async () => {
+  const before = process.env.ADMIN_EMAILS;
+  process.env.ADMIN_EMAILS = `${before},owner@example.com`;
+  try {
+    const squatter = client();
+    squatter.email = "owner@example.com";
+    assert.equal((await squatter.authCall("POST", "/sign-up/email", {
+      email: "owner@example.com", password: "the squatter's password", name: "owner",
+      callbackURL: "/dashboard" })).status, 200);
+    const owner = client();
+    owner.email = "owner@example.com";
+    const confirm = [...outbox].reverse().find((m) => m.to[0] === "owner@example.com");
+    assert.equal((await owner.authCall("GET", linkIn(confirm).replace(BASE, ""))).status, 302);
+
+    assert.equal((await squatter.authCall("POST", "/sign-in/email", {
+      email: "owner@example.com", password: "the squatter's password" })).status, 200);
+    const me = (await squatter.get("me")).data.user;
+    assert.equal(me.isAdmin, false);
+    assert.equal(me.adminPending, true);
+    assert.equal((await squatter.post("admin/github-app", {})).status, 403);
+    assert.equal((await squatter.get("admin")).status, 403);
+    // Claiming only mails the inbox, and no faster than Better Auth's reset limit allows.
+    const sent = outbox.length;
+    const claims = [];
+    for (let i = 0; i < 4; i++) claims.push((await squatter.post("admin/claim", {})).status);
+    assert.deepEqual(claims, [200, 200, 200, 429]);
+    assert.equal(outbox.length, sent + 3);
+    assert.ok(outbox.slice(sent).every((m) => m.to[0] === "owner@example.com"));
+
+    // The inbox's owner uses the link and chooses the password; the squatter is out.
+    await resetFromMail(owner, outbox.at(-1), "the owner's own password");
+    assert.equal((await squatter.get("me")).status, 401);
+    assert.equal((await client().authCall("POST", "/sign-in/email", {
+      email: "owner@example.com", password: "the squatter's password" })).status, 401);
+    assert.equal((await owner.get("me")).data.user.isAdmin, true);
+  } finally {
+    process.env.ADMIN_EMAILS = before;
+  }
 });
 
 test("CSRF: a mutation without our Origin, or without a JSON body, is refused", async () => {
@@ -369,7 +483,7 @@ test("CSRF: a mutation without our Origin, or without a JSON body, is refused", 
   ];
   for (const opts of cases) {
     const { body = { repos: ["ada/shop-web"] }, ...rest } = opts;
-    for (const path of ["projects", "github/disconnect", "admin/github-app"]) {
+    for (const path of ["projects", "github/disconnect", "admin/claim", "admin/github-app"]) {
       const r = await boss.post(path, body, rest);
       assert.equal(r.status, 403, `${path} ${JSON.stringify(opts)}`);
     }
@@ -402,12 +516,14 @@ test("the manifest flow: our state only, secrets stored encrypted, a second App 
   for (const s of [signState(SECRET, `ghapp:${chief.id}`), signState(SECRET, `gh:${boss.id}`), ""]) {
     const x = await cb(boss, { code: "mcode-1", state: s });
     assert.equal(new URL(x.location, BASE).pathname, "/admin");
-    assert.match(query(x.location).error, /not started from this account/);
+    assert.equal(errorOf(x.location), "app_state");
   }
-  assert.match(query((await cb(chief, { code: "mcode-1", state })).location).error,
-               /not started from this account/);
-  assert.match(query((await cb(boss, { state })).location).error, /did not send/);
-  assert.equal(world.conversions, 0);
+  assert.equal(errorOf((await cb(chief, { code: "mcode-1", state })).location), "app_state");
+  assert.equal(errorOf((await cb(boss, { state })).location), "app_failed");
+  // A code GitHub does not know: GitHub's own words stay in the log, not in the URL.
+  const unknown = await cb(boss, { code: "mcode-unknown", state });
+  assert.equal(unknown.location, "/admin?error=app_failed");
+  assert.equal(world.conversions, 1);
 
   const done = await cb(boss, { code: "mcode-1", state });
   assert.equal(done.location, "/admin?github=created");
@@ -432,7 +548,7 @@ test("the manifest flow: our state only, secrets stored encrypted, a second App 
   assert.equal(again.status, 409);
   const before = world.conversions;
   const second = await cb(boss, { code: "mcode-2", state: signState(SECRET, `ghapp:${boss.id}`) });
-  assert.match(query(second.location).error, /already set up/);
+  assert.equal(errorOf(second.location), "app_exists");
   assert.equal(world.conversions, before, "the second code is never exchanged");
   assert.equal((await rows("select value from cx_setting where key = 'gh_app_id'"))[0].value, "4242");
 });
@@ -475,7 +591,7 @@ test("connect starts at GitHub's install page with a state only this account can
 test("a callback started by another account binds nothing", async () => {
   for (const state of [ghState(bob), signState(SECRET, `ghapp:${ada.id}`), "", "junk"]) {
     const r = await callback(ada, { code: "ada-code", installation_id: "100", state });
-    assert.match(query(r.location).error, /not started from this account/);
+    assert.equal(errorOf(r.location), "state");
   }
   assert.equal((await ada.get("me")).data.github, null);
 });
@@ -483,24 +599,38 @@ test("a callback started by another account binds nothing", async () => {
 test("no OAuth code, or one GitHub refuses, binds nothing", async () => {
   const none = await callback(ada, { installation_id: "100", setup_action: "install", state: ghState(ada) });
   assert.equal(new URL(none.location, BASE).pathname, "/connect/github");
-  assert.match(query(none.location).error, /GitHub did not send an authorization/);
+  assert.equal(errorOf(none.location), "no_code");
   const setup = await ada.page(`/connect/github/setup?${new URLSearchParams({ installation_id: "100",
                                                                                state: ghState(ada) })}`);
-  assert.match(query(setup.location).error, /did not send an authorization/);
+  assert.equal(errorOf(setup.location), "no_code");
   const refused = await callback(ada, { code: "made-up", installation_id: "100", state: ghState(ada) });
-  assert.match(query(refused.location).error, /did not accept the authorization/);
+  assert.equal(errorOf(refused.location), "github");
   assert.equal((await ada.get("me")).data.github, null);
+});
+
+test("an install request waiting for an organisation's owners binds nothing", async () => {
+  // GitHub sends a member who asked their organisation back with setup_action=request and
+  // no installation. ada's code would show her own free installation; it is not what she
+  // asked for, so nothing is bound, with or without a state.
+  for (const params of [{ code: "ada-code", setup_action: "request", state: ghState(ada) },
+                        { setup_action: "request", state: ghState(ada) },
+                        { code: "ada-code", setup_action: "request" }]) {
+    const r = await callback(ada, params);
+    assert.equal(r.location, "/connect/github?error=org_request");
+  }
+  assert.equal((await ada.get("me")).data.github, null);
+  assert.equal((await rows("select count(*) as c from cx_github"))[0].c, 0);
 });
 
 test("someone else's installation is refused, even when the person can see it", async () => {
   // ada collaborates on bob's repo and is a plain member of acme: she sees both.
   for (const iid of ["200", "300", "999"]) {
     const r = await callback(ada, { code: "ada-code", installation_id: iid, state: ghState(ada) });
-    assert.match(query(r.location).error, /not on your own GitHub account/, iid);
+    assert.equal(errorOf(r.location), "not_yours", iid);
   }
   // An organisation whose membership check fails is no proof either.
   const flaky = await callback(dana, { code: "dana-flaky", installation_id: "300", state: ghState(dana) });
-  assert.match(query(flaky.location).error, /not on your own GitHub account/);
+  assert.equal(errorOf(flaky.location), "not_yours");
   assert.equal((await rows("select count(*) as c from cx_github"))[0].c, 0);
 });
 
@@ -529,9 +659,9 @@ test("an organisation's admin binds its installation; then nobody else can", asy
                "https://github.com/organizations/acme/settings/installations/300");
   // dana administers acme too, but 300 is carl's now.
   const taken = await callback(dana, { code: "dana-code", installation_id: "300", state: ghState(dana) });
-  assert.match(query(taken.location).error, /already connected to another account/);
+  assert.equal(errorOf(taken.location), "taken");
   const none = await callback(dana, { code: "dana-code", state: ghState(dana) });
-  assert.match(query(none.location).error, /Install it first/);
+  assert.equal(errorOf(none.location), "not_installed");
   assert.equal((await dana.get("me")).data.github, null);
 });
 
@@ -634,6 +764,30 @@ test("reserved names and taken slugs get the next free suffix; 5 services at mos
   // A slug someone takes between the check and the insert is picked again.
   const { makeSlug } = await import("../plan.js");
   assert.equal(await makeSlug("shop web", async (s) => ["shop-web", "shop-web-2"].includes(s)), "shop-web-3");
+});
+
+repo("erin-labs/new", { head: sha("4"), files: { "index.html": "<p>new</p>\n" } });
+
+test("the 5-service cap holds for requests sent side by side", async () => {
+  // Each request counts before GitHub answers; only the write can see the others.
+  const results = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+    erin.post("projects", { repos: ["erin-labs/new"], name: `race ${i}` })));
+  const statuses = results.map((r) => r.status).sort();
+  assert.deepEqual(statuses, [200, 200, 200, 200, 200, 409, 409, 409]);
+  for (const r of results.filter((x) => x.status === 409)) {
+    assert.match(r.data.error, /Service limit reached: 5\/5 used, tried to add 1/);
+  }
+  const [{ c }] = await rows("select count(*) as c from cx_service s join cx_project p on " +
+                             "p.id = s.projectId where p.userId = ?", [erin.id]);
+  assert.equal(c, 5);
+  // A refused write leaves nothing behind, the project included.
+  assert.equal((await rows("select count(*) as c from cx_project where userId = ?", [erin.id]))[0].c, 5);
+  const { insertProject } = await import("../store.js");
+  assert.equal(await insertProject(db, { id: "p-over", userId: erin.id, name: "x", slug: "over-cap" },
+    [{ id: "s-over", name: "x", slug: "over-cap", repoFull: "erin-labs/new", branch: "main",
+       isPrimary: true }], { maxServices: 5 }), false);
+  assert.equal((await rows("select count(*) as c from cx_project where id = 'p-over'"))[0].c, 0);
+  assert.equal((await rows("select count(*) as c from cx_service where id = 's-over'"))[0].c, 0);
 });
 
 test("another account's project is not found", async () => {
@@ -894,6 +1048,12 @@ test("vercel.json sends every workspace URL to the function, and keeps what was 
   assert.equal(cfg.cleanUrls, true);
   assert.deepEqual(cfg.functions, { "api/auth.js": { maxDuration: 15 },
                                     "api/workspace.js": { maxDuration: 60 } });
+  // No page may be framed (clickjacking from any *.cicatrixa.com app), every path.
+  assert.deepEqual(cfg.headers, [{ source: "/(.*)", headers: [
+    { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+    { key: "X-Frame-Options", value: "DENY" },
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" }] }]);
   assert.deepEqual(cfg.redirects[0], { source: "/", has: [{ type: "host", value: "app.cicatrixa.com" }],
                                        destination: "/dashboard", permanent: false });
   const rewrites = Object.fromEntries(cfg.rewrites.map((r) => [r.source, r.destination]));

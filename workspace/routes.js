@@ -8,7 +8,7 @@
 // URL. Routes, by the path after /api/workspace/ (DESIGN "HTTP API"):
 //   JSON  GET me, repos, projects, projects/:id, admin
 //         POST projects, projects/:id/services/:sid/analyze, projects/:id/delete,
-//              github/disconnect, admin/github-app
+//              github/disconnect, admin/claim, admin/github-app
 //   pages GET connect/github/{start,authorize,callback,setup}, admin/github/callback
 //   hook  POST webhooks/github
 import { randomUUID } from "node:crypto";
@@ -42,19 +42,46 @@ function redirect(location) {
   return new Response(null, { status: 303, headers: { location, ...NO_STORE } });
 }
 
-const withError = (page, why) => redirect(`${page}?${new URLSearchParams({ error: why })}`);
+// What a page may be sent back with in ?error=. Only these codes, never a sentence: the
+// pages turn a code into their own words, so a link from anyone cannot put its text
+// under Cicatrixa's banner (site/workspace.js has the sentences, and the platform's
+// main.py sends the same codes).
+export const ERROR_CODES = Object.freeze(["app_missing", "state", "no_code", "not_yours",
+  "not_installed", "taken", "org_request", "github", "admin_only", "app_exists", "app_state",
+  "app_failed", "signin"]);
+
+function withError(page, code) {
+  if (!ERROR_CODES.includes(code)) throw new Error(`unknown error code ${code}`);
+  return redirect(`${page}?${new URLSearchParams({ error: code })}`);
+}
 
 export function adminEmails(env = process.env) {
   const raw = (env.ADMIN_EMAILS || "").trim() || DEFAULT_ADMINS;
   return raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 }
 
-// The emailed link is the proof an address is theirs: an unverified account named
-// like an admin is not one (the platform's rule).
-export function isAdmin(user, env = process.env) {
+// An address named in ADMIN_EMAILS, confirmed by its emailed link. Not yet an admin: the
+// confirmation proves someone who reads the inbox clicked, not that they chose the
+// password — whoever signed up first did, and anyone can sign up with any address.
+export function adminAddress(user, env = process.env) {
   return Boolean(user?.emailVerified && user.email &&
                  adminEmails(env).includes(user.email.toLowerCase()));
 }
+
+// isAdmin: an admin address whose password was set through an emailed reset link
+// (store.passwordProof, recorded by accounts/auth.js), so the password holder reads the
+// inbox. adminPending: an admin address without that proof yet; POST admin/claim mails
+// it a reset link. import_online applies the same rule to the platform's is_admin.
+async function adminStatus(c) {
+  c.adminStatus ??= (async () => {
+    if (!adminAddress(c.user, c.env)) return { isAdmin: false, adminPending: false };
+    const proved = Boolean(await store.passwordProof(c.client, c.user.id));
+    return { isAdmin: proved, adminPending: !proved };
+  })();
+  return c.adminStatus;
+}
+
+const isAdmin = async (c) => (await adminStatus(c)).isAdmin;
 
 // The route: what follows /api/workspace/, or the page path itself.
 export function routeKey(pathname) {
@@ -106,11 +133,13 @@ function projectView(p, opts) {
 // ---------- JSON endpoints ----------
 
 async function me(c) {
-  const [settings, conn, services, analyses] = await Promise.all([
+  const [settings, conn, services, analyses, admin] = await Promise.all([
     c.settings(), store.getConnection(c.client, c.user.id),
-    store.countUserServices(c.client, c.user.id), store.countAnalyses(c.client, c.user.id)]);
+    store.countUserServices(c.client, c.user.id), store.countAnalyses(c.client, c.user.id),
+    adminStatus(c)]);
   return json({
-    user: { id: c.user.id, email: c.user.email, name: c.user.name, isAdmin: isAdmin(c.user, c.env) },
+    user: { id: c.user.id, email: c.user.email, name: c.user.name, isAdmin: admin.isAdmin,
+            adminPending: admin.adminPending },
     github: conn ? { installationId: conn.installationId, accountLogin: conn.accountLogin,
                      accountType: conn.accountType } : null,
     app: { configured: github.appConfigured(settings), slug: settings.gh_app_slug || null },
@@ -183,11 +212,15 @@ async function createProject(c) {
 
   const { settings, conn, refusal } = await connected(c);
   if (refusal) return refusal;
-  const current = await store.countUserServices(c.client, c.user.id);
-  if (current + wanted.length > LIMITS.services) {
-    return fail(409, `Service limit reached: ${current}/${LIMITS.services} used, tried to add ` +
-                     `${wanted.length}. Delete a project to make room.`);
-  }
+  const overLimit = async () => {
+    const current = await store.countUserServices(c.client, c.user.id);
+    return current + wanted.length > LIMITS.services &&
+      fail(409, `Service limit reached: ${current}/${LIMITS.services} used, tried to add ` +
+                `${wanted.length}. Delete a project to make room.`);
+  };
+  // Early, to spare GitHub the calls; insertProject is what enforces it.
+  const early = await overLimit();
+  if (early) return early;
 
   // Every repo must be one this account's installation can read: a typed name is not
   // access, and the platform will clone with the same installation.
@@ -225,13 +258,17 @@ async function createProject(c) {
       services.push({ id: randomUUID(), name: sname, slug, repoFull: info.full_name,
                       branch: branch || info.default_branch, isPrimary: i === 0 });
     }
+    let stored;
     try {
-      await store.insertProject(c.client, project, services);
+      stored = await store.insertProject(c.client, project, services,
+                                         { maxServices: LIMITS.services });
     } catch (err) {
       // Someone took a slug between the check and the insert: pick again.
       if (attempt < 3 && /UNIQUE/i.test(String(err.message))) continue;
       throw err;
     }
+    // Another request of this account's filled the room while GitHub answered.
+    if (!stored) return (await overLimit()) || fail(409, "Service limit reached. Try again.");
     return json({ project: projectView(await store.getProject(c.client, c.user.id, project.id),
                                        { detail: true }) });
   }
@@ -356,7 +393,7 @@ async function disconnect(c) {
 }
 
 async function admin(c) {
-  if (!isAdmin(c.user, c.env)) return fail(403, "Admins only.");
+  if (!await isAdmin(c)) return fail(403, "Admins only.");
   const settings = await c.settings();
   return json({
     app: { configured: github.appConfigured(settings), slug: settings.gh_app_slug || null,
@@ -366,11 +403,39 @@ async function admin(c) {
   });
 }
 
+// An admin address claims its admin rights: Better Auth emails the account's own address
+// a password-reset link, and the password set through it is the proof (adminStatus).
+// The request goes through Better Auth's handler, not auth.api, so its own limit on
+// /request-password-reset (per visitor address) applies; a direct call skips the limiter.
+async function claimAdmin(c) {
+  const { isAdmin: already, adminPending } = await adminStatus(c);
+  if (already) return fail(409, "This account is already an admin.");
+  if (!adminPending) return fail(403, "Admins only.");
+  const base = baseURL(c.env);
+  const headers = new Headers({ "content-type": "application/json" });
+  for (const name of ["origin", "x-forwarded-for", "x-real-ip", "user-agent"]) {
+    const value = c.request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  const res = await c.auth.handler(new Request(`${base}/api/auth/request-password-reset`, {
+    method: "POST", headers,
+    body: JSON.stringify({ email: c.user.email, redirectTo: `${base}/reset-password` }),
+  }));
+  if (res.status === 429) {
+    return fail(429, "Too many emails asked for from here. Try again in a minute.");
+  }
+  if (!res.ok) {
+    console.error(`workspace: admin claim: Better Auth answered ${res.status}`);
+    return fail(502, "The email could not be sent. Try again in a minute.");
+  }
+  return json({ ok: true });
+}
+
 // The page POSTs a hidden form to `action` with field manifest = `manifest` (a JSON
 // string): GitHub's manifest flow creates the App, then comes back to
 // /admin/github/callback with a code and our state.
 async function createApp(c) {
-  if (!isAdmin(c.user, c.env)) return fail(403, "Admins only.");
+  if (!await isAdmin(c)) return fail(403, "Admins only.");
   if (github.appConfigured(await c.settings())) {
     return fail(409, "A GitHub App is already set up. A second one would strand every " +
                      "installation of the first.");
@@ -396,9 +461,7 @@ const LOGIN_FOR_CONNECT = `/login?${new URLSearchParams({ next: "/connect/github
 async function connectStart(c) {
   if (!c.user) return redirect(LOGIN_FOR_CONNECT);
   const settings = await c.settings();
-  if (!github.appConfigured(settings)) {
-    return withError("/connect/github", "The GitHub App is not set up yet.");
-  }
+  if (!github.appConfigured(settings)) return withError("/connect/github", "app_missing");
   const conn = await store.getConnection(c.client, c.user.id);
   if (conn) {
     // Already installed: GitHub's installation settings page has the repo picker.
@@ -417,7 +480,7 @@ async function connectAuthorize(c) {
   const url = github.authorizeURL(await c.settings(),
                                   signState(c.env.BETTER_AUTH_SECRET, `gh:${c.user.id}`),
                                   baseURL(c.env));
-  return url ? redirect(url) : withError("/connect/github", "The GitHub App is not set up yet.");
+  return url ? redirect(url) : withError("/connect/github", "app_missing");
 }
 
 // Exact port of main.py connect_setup. Nothing in this URL can be taken on trust:
@@ -428,22 +491,25 @@ async function connectAuthorize(c) {
 async function connectCallback(c) {
   if (!c.user) return redirect(LOGIN_FOR_CONNECT);
   const params = c.url.searchParams;
-  const refuse = (why) => withError("/connect/github", why);
+  const refuse = (code) => withError("/connect/github", code);
 
+  // An organisation member asked for an install: GitHub sent the request to the owners
+  // and there is no installation yet. Binding anything here (a personal installation
+  // the code happens to show) would not be what they asked for, and a plain member can
+  // never connect the organisation's installation: an owner does, from their own account.
+  // It binds nothing, so it needs no state.
+  if (params.get("setup_action") === "request") return refuse("org_request");
   if (readState(c.env.BETTER_AUTH_SECRET, params.get("state"), "gh:") !== c.user.id) {
-    return refuse("That GitHub link was not started from this account. Connect from this page.");
+    return refuse("state");
   }
   const raw = params.get("installation_id");
   const wanted = raw && /^\d{1,15}$/.test(raw) ? Number(raw) : null;
   if (wanted && await store.installationOwner(c.client, wanted) === c.user.id) {
     return redirect("/projects/new");                                // already theirs
   }
-  if (!params.get("code")) {
-    return refuse("GitHub did not send an authorization. If the App is already installed, " +
-                  "use \"Already installed? Connect it\" below.");
-  }
+  if (!params.get("code")) return refuse("no_code");
   const proof = await c.gh.installationsUserControls(await c.settings(), params.get("code"));
-  if (!proof) return refuse("GitHub did not accept the authorization. Try again.");
+  if (!proof) return refuse("github");
   const { me: person, controlled } = proof;
 
   const boundElsewhere = async (iid) => {
@@ -452,23 +518,16 @@ async function connectCallback(c) {
   };
   let chosen;
   if (wanted) {
-    if (!controlled.has(wanted)) {
-      return refuse("That installation is not on your own GitHub account or an organisation " +
-                    "you administer. Ask an owner to connect it.");
-    }
+    if (!controlled.has(wanted)) return refuse("not_yours");
     chosen = wanted;
   } else {
     const free = [];
     for (const iid of controlled.keys()) if (!await boundElsewhere(iid)) free.push(iid);
-    if (!free.length) {
-      return refuse("The App is not installed on your GitHub account or on an organisation " +
-                    "you administer. Install it first.");
-    }
+    if (!free.length) return refuse("not_installed");
     const created = (iid) => controlled.get(iid).created_at || "";
     chosen = free.reduce((a, b) => (created(b) > created(a) ? b : a));
   }
-  const already = "That GitHub installation is already connected to another account.";
-  if (await boundElsewhere(chosen)) return refuse(already);
+  if (await boundElsewhere(chosen)) return refuse("taken");
   const account = controlled.get(chosen).account || {};
   try {
     await store.bindInstallation(c.client, { userId: c.user.id, installationId: chosen,
@@ -476,7 +535,7 @@ async function connectCallback(c) {
                                              accountType: account.type || "",
                                              provedBy: person?.login || "" });
   } catch (err) {
-    if (/UNIQUE/i.test(String(err.message))) return refuse(already);   // lost a race
+    if (/UNIQUE/i.test(String(err.message))) return refuse("taken");   // lost a race
     throw err;
   }
   return redirect("/projects/new?github=connected");
@@ -485,26 +544,27 @@ async function connectCallback(c) {
 // GitHub comes back here after the admin creates the App from /admin.
 async function adminCallback(c) {
   if (!c.user) return redirect(`/login?${new URLSearchParams({ next: "/admin" })}`);
-  const refuse = (why) => withError("/admin", why);
-  if (!isAdmin(c.user, c.env)) return refuse("Only an admin can create the GitHub App.");
+  const refuse = (code) => withError("/admin", code);
+  if (!await isAdmin(c)) return refuse("admin_only");
   const params = c.url.searchParams;
   if (readState(c.env.BETTER_AUTH_SECRET, params.get("state"), "ghapp:") !== c.user.id) {
-    return refuse("That GitHub App link was not started from this account. Create it from this page.");
+    return refuse("app_state");
   }
-  const already = "A GitHub App is already set up; the new one was not stored. " +
-                  "Delete it on GitHub.";
-  if (github.appConfigured(await c.settings())) return refuse(already);
-  if (!params.get("code")) return refuse("GitHub did not send the App's code. Try again.");
+  // The new App, if GitHub made one, is not stored: a second would strand every
+  // installation of the first.
+  if (github.appConfigured(await c.settings())) return refuse("app_exists");
+  if (!params.get("code")) return refuse("app_failed");
   let values;
   try {
     values = await c.gh.exchangeManifestCode(params.get("code"));
   } catch (err) {
-    return refuse(`GitHub did not hand over the App: ${err.message}`);
+    console.error("workspace: GitHub did not hand over the App:", err.message);
+    return refuse("app_failed");
   }
   try {
     await store.saveAppSettings(c.client, c.env.BETTER_AUTH_SECRET, values);
   } catch (err) {
-    if (/UNIQUE|constraint/i.test(String(err.message))) return refuse(already);
+    if (/UNIQUE|constraint/i.test(String(err.message))) return refuse("app_exists");
     throw err;
   }
   return redirect("/admin?github=created");
@@ -542,6 +602,7 @@ const ROUTES = [
   ["POST", /^projects\/([\w-]{1,64})\/delete$/, deleteProject, "json"],
   ["POST", /^github\/disconnect$/, disconnect, "json"],
   ["GET", /^admin$/, admin, "json"],
+  ["POST", /^admin\/claim$/, claimAdmin, "json"],
   ["POST", /^admin\/github-app$/, createApp, "json"],
   ["GET", /^connect\/github\/start$/, connectStart, "page"],
   ["GET", /^connect\/github\/authorize$/, connectAuthorize, "page"],
@@ -611,8 +672,8 @@ export async function handleWorkspace(request, { env = process.env, client, auth
   } catch (err) {
     console.error(`workspace: ${request.method} ${key} failed:`, err?.message || err);
     if (route.kind === "page") {
-      return withError(key.startsWith("admin/") ? "/admin" : "/connect/github",
-                       "Something went wrong. Try again.");
+      return key.startsWith("admin/") ? withError("/admin", "app_failed")
+        : withError("/connect/github", "github");
     }
     return fail(500, "Something went wrong. Try again.");
   }

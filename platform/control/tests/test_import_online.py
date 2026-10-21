@@ -5,6 +5,7 @@ online tables, answering in Turso's own wire format."""
 import asyncio
 import base64
 import hashlib
+import hmac
 import os
 import sqlite3
 import types
@@ -132,6 +133,10 @@ class FakeTurso:
                             (f"{pid}-s{i}", pid, sname, sslug, repo, branch,
                              1 if i == 0 else 0, when, when))
 
+    def proof(self, uid):
+        """accounts/auth.js onPasswordReset: the password was set through an emailed link."""
+        self.db.execute("insert into cx_setting values (?,?,?)", (f"pw_proof:{uid}", WHEN, WHEN))
+
     def app(self, app_id="424242"):
         for key, value in {"gh_app_id": app_id, "gh_app_slug": "cicatrixa",
                            "gh_app_name": "Cicatrixa", "gh_app_client_id": "Iv1.abc",
@@ -162,6 +167,16 @@ def online_world(t: FakeTurso):
     t.project("p-shop", "u-owner", "shop", "shop",
               [("shop", "shop", "acme/shop", "main"), ("api", "shop-api", "acme/api", "dev")])
     t.project("p-blog", "u-ada", "blog", "blog", [("blog", "blog", "ada/blog", "main")])
+
+
+def ba_hash(password: str) -> str:
+    """A Better Auth hash, by its own rules (understand-data.md §2): scrypt N=16384 r=16
+    p=1 dklen 64 over the NFKC password, the salt being the hex TEXT's bytes."""
+    import unicodedata
+    salt = os.urandom(16).hex()
+    key = hashlib.scrypt(unicodedata.normalize("NFKC", password).encode(), salt=salt.encode(),
+                         n=16384, r=16, p=1, dklen=64, maxmem=64 * 1024 * 1024)
+    return f"{salt}:{key.hex()}"
 
 
 def count(table):
@@ -308,16 +323,39 @@ def test_the_github_app_comes_over_decrypted_and_nothing_else_does(turso):
     assert "copied" in report.app
 
 
-def test_admin_needs_admin_emails_and_an_email_confirmed_online(turso):
+def test_admin_needs_admin_emails_a_confirmed_email_and_a_password_set_by_emailed_link(turso):
     turso.user("u-owner", "owner@example.com", verified=1)
+    turso.proof("u-owner")
     turso.user("u-squat", "squat@example.com", verified=0)
+    turso.proof("u-squat")
     turso.user("u-ada", "ada@example.com", verified=1)
+    turso.proof("u-ada")
     report = import_online.run(env={**ENV, "ADMIN_EMAILS": "owner@example.com,squat@example.com"})
     assert box_user("owner@example.com")["is_admin"] == 1
     assert box_user("squat@example.com")["is_admin"] == 0      # typed, never confirmed
     assert box_user("squat@example.com")["email_verified"] == 0
-    assert box_user("ada@example.com")["is_admin"] == 0
+    assert box_user("ada@example.com")["is_admin"] == 0        # not an admin address
     assert report.admins == ["owner@example.com"]
+
+
+def test_a_confirmed_admin_address_whose_password_nobody_proved_is_not_admin(turso):
+    """Someone signed up as the owner's address with their own password; the owner
+    clicked the confirmation link they were sent. Confirmed — and the squatter's
+    password. Only a password set through an emailed reset link proves the holder."""
+    turso.user("u-owner", "owner@example.com", verified=1)
+    report = run()
+    assert box_user("owner@example.com")["is_admin"] == 0
+    assert report.admins == [] and report.admins_unproven == ["owner@example.com"]
+    assert "owner@example.com is in ADMIN_EMAILS" in report.summary()
+    assert "app.promote" in report.summary()
+
+
+def test_a_proof_made_online_after_the_import_makes_the_admin_on_the_next_run(turso):
+    turso.user("u-owner", "owner@example.com", verified=1)
+    run()
+    turso.proof("u-owner")
+    again = run()
+    assert box_user("owner@example.com")["is_admin"] == 1 and again.admins == ["owner@example.com"]
 
 
 def test_without_admin_emails_nobody_is_made_admin_and_the_summary_says_how(turso):
@@ -327,18 +365,86 @@ def test_without_admin_emails_nobody_is_made_admin_and_the_summary_says_how(turs
     assert "app.promote" in report.summary()
 
 
-def test_an_account_already_on_the_box_keeps_its_password(turso, client):
-    uid = db.q("INSERT INTO users(email,pw_hash,email_verified,created_at) VALUES(?,?,1,?)",
-               ("ada@example.com", auth.hash_password("box password"), db.now())).lastrowid
-    before = box_user("ada@example.com")["pw_hash"]
-    turso.user("u-ada", "Ada@Example.com")
-    turso.project("p-blog", "u-ada", "blog", "blog", [("blog", "blog", "ada/blog", "main")])
+def box_account(email, verified=1, created_at=None):
+    return db.q("INSERT INTO users(email,pw_hash,email_verified,created_at) VALUES(?,?,?,?)",
+                (email, auth.hash_password("box password"), verified,
+                 created_at or db.now())).lastrowid
+
+
+def ada_online(t: FakeTurso, verified=1):
+    t.app()
+    t.user("u-ada", "Ada@Example.com", verified=verified)
+    t.github("u-ada", 7777, "ada")
+    t.project("p-blog", "u-ada", "blog", "blog", [("blog", "blog", "ada/blog", "main")])
+
+
+def test_an_account_already_on_the_box_is_not_merged_by_default(turso, client):
+    """Whoever signed up here first with that address (the box takes sign-ups on any
+    host once `*` points at it; with email off it confirms them without proof) must
+    not receive the online person's GitHub installation and projects."""
+    uid = box_account("ada@example.com", created_at=1760000000)
+    ada_online(turso)
+    report = run(dry_run=True)
+    assert report.users_linked == [] and report.users_new == 0
+    [why] = report.users_existing
+    assert why.startswith("ada@example.com: already has an account here")
+    assert "made here 2025-10-09" in why and "email confirmed" in why
+    assert "0 projects" in why and "no GitHub" in why
+    assert "--link-existing" in report.summary()
     report = run()
+    assert box_user("ada@example.com")["external_id"] is None
+    assert db.one("SELECT 1 FROM github_connections WHERE installation_id=7777") is None
+    assert db.one("SELECT 1 FROM projects WHERE external_id='p-blog'") is None
+    assert any("owner was not brought over" in s for s in report.projects_skipped)
+    assert box_user("ada@example.com")["id"] == uid
+
+
+def test_link_existing_merges_when_both_sides_confirmed_and_the_box_password_stays(
+        turso, client):
+    uid = box_account("ada@example.com")
+    before = box_user("ada@example.com")["pw_hash"]
+    ada_online(turso)
+    report = run(link_existing=True)
     assert report.users_linked == ["ada@example.com"] and report.users_new == 0
     row = box_user("ada@example.com")
     assert row["id"] == uid and row["pw_hash"] == before and row["external_id"] == "u-ada"
     assert db.one("SELECT user_id FROM projects WHERE external_id='p-blog'")["user_id"] == uid
+    assert db.one("SELECT user_id FROM github_connections WHERE installation_id=7777")[
+        "user_id"] == uid
     assert log_in(client, "ada@example.com", "box password").status_code == 303
+
+
+@pytest.mark.parametrize("box_verified,online_verified,why", [
+    (0, 1, "the account here never confirmed its email"),
+    (1, 0, "the online account never confirmed its email")])
+def test_link_existing_never_merges_a_side_that_did_not_confirm(
+        turso, box_verified, online_verified, why):
+    box_account("ada@example.com", verified=box_verified)
+    ada_online(turso, verified=online_verified)
+    report = run(link_existing=True)
+    assert report.users_linked == [] and why in report.users_existing[0]
+    assert box_user("ada@example.com")["external_id"] is None
+    assert db.one("SELECT 1 FROM projects WHERE external_id='p-blog'") is None
+
+
+def test_a_box_squatter_with_email_off_gets_nothing_of_the_victims(turso, client, monkeypatch):
+    """The review's attack: sign up here as the victim before the import, with email
+    off (confirmed on the spot), and wait. Sign-ups now wait for the import, and an
+    account made before them is never merged by default."""
+    monkeypatch.setattr(mailer, "RESEND_API_KEY", "")
+    monkeypatch.setenv("TURSO_DATABASE_URL", ENV["TURSO_DATABASE_URL"])
+    r = client.post("/signup", data={"email": "victim@example.com", "password": "attacker-pw"},
+                    follow_redirects=False)
+    assert r.status_code == 200 and "Sign-ups open shortly" in r.text
+    assert box_user("victim@example.com") is None
+    squatter = box_account("victim@example.com")          # made some other way, earlier
+    turso.app()
+    turso.user("u-victim", "victim@example.com")
+    turso.github("u-victim", 7777, "victim")
+    turso.project("p-v", "u-victim", "vproj", "vproj", [("vproj", "vproj", "victim/secret", "main")])
+    run()
+    assert db.one("SELECT 1 FROM github_connections WHERE user_id=?", (squatter,)) is None
+    assert db.one("SELECT 1 FROM projects WHERE user_id=?", (squatter,)) is None
 
 
 def test_running_it_again_adds_nothing_twice(turso):
@@ -360,6 +466,77 @@ def test_a_second_run_brings_only_what_is_new(turso):
     again = run()
     assert (again.users_new, again.projects_new, again.services_new) == (1, 1, 1)
     assert count("projects") == 3
+
+
+def test_a_password_reset_online_since_is_carried_over(turso, client):
+    online_world(turso)
+    run()
+    turso.db.execute("update account set password=? where userId='u-ada'",
+                     (ba_hash("brand new password 99"),))
+    again = run()
+    assert again.users_refreshed == ["ada@example.com"]
+    assert log_in(client, "ada@example.com", "brand new password 99").status_code == 303
+    assert "Wrong email or password" in log_in(client, "ada@example.com", BA_PASSWORD).text
+    assert run().users_refreshed == []                          # nothing new the third time
+
+
+def test_a_password_chosen_here_is_never_overwritten_by_the_online_one(turso, client):
+    online_world(turso)
+    run()
+    db.q("UPDATE users SET pw_hash=? WHERE email='ada@example.com'",
+         (auth.hash_password("chosen on the box"),))
+    turso.db.execute("update account set password=? where userId='u-ada'",
+                     (ba_hash("brand new password 99"),))
+    assert run().users_refreshed == []
+    assert log_in(client, "ada@example.com", "chosen on the box").status_code == 303
+
+
+def test_an_email_confirmed_online_since_is_confirmed_here(turso):
+    turso.user("u-a", "a@example.com", verified=0)
+    run()
+    assert box_user("a@example.com")["email_verified"] == 0
+    turso.db.execute("update \"user\" set emailVerified=1 where id='u-a'")
+    assert run().users_confirmed == ["a@example.com"]
+    assert box_user("a@example.com")["email_verified"] == 1
+
+
+def test_a_project_deleted_here_never_comes_back(turso):
+    online_world(turso)
+    run()
+    pid = db.one("SELECT id FROM projects WHERE external_id='p-blog'")["id"]
+    db.q("DELETE FROM services WHERE project_id=?", (pid,))    # as engine.delete_project
+    db.q("DELETE FROM projects WHERE id=?", (pid,))
+    again = run()
+    assert again.projects_new == 0 and again.projects_deleted_here == ["blog (blog)"]
+    assert db.one("SELECT 1 FROM projects WHERE external_id='p-blog'") is None
+
+
+def test_a_project_deleted_online_goes_here_too_unless_it_has_deployed(turso):
+    online_world(turso)
+    run()
+    shop = db.one("SELECT id FROM projects WHERE external_id='p-shop'")["id"]
+    shop_api = db.one("SELECT id FROM services WHERE slug='shop-api'")["id"]
+    db.q("INSERT INTO deployments(service_id,status,created_at) VALUES(?,'success',?)",
+         (shop_api, db.now()))
+    for pid in ("p-blog", "p-shop"):
+        turso.db.execute("delete from cx_service where projectId=?", (pid,))
+        turso.db.execute("delete from cx_project where id=?", (pid,))
+    again = run()
+    assert again.projects_removed == ["blog (blog)"]
+    assert db.one("SELECT 1 FROM projects WHERE slug='blog'") is None
+    assert db.one("SELECT 1 FROM services WHERE slug='blog'") is None
+    assert db.one("SELECT 1 FROM projects WHERE id=?", (shop,)) is not None
+    assert "shop (shop): deleted online, but it has deployed here" in again.summary()
+
+
+def test_without_the_online_projects_table_nothing_here_is_removed(turso, monkeypatch):
+    online_world(turso)
+    run()
+    bare = FakeTurso(workspace=False)
+    bare.user("u-owner", "owner@example.com")
+    bare.user("u-ada", "ada@example.com")
+    monkeypatch.setattr(import_online, "_post_pipeline", bare)
+    assert run().projects_removed == [] and count("projects") == 2
 
 
 def test_an_address_taken_on_the_box_skips_that_project_and_says_so(turso):
@@ -391,6 +568,9 @@ def test_an_installation_connected_to_another_account_here_is_not_imported(turso
         "user_id"] == other
     assert report.connections_new == 1
     assert any("installation 1001" in s for s in report.connections_skipped)
+    # Its projects would only fail at deploy ("no GitHub connection"): held back, listed.
+    assert report.held_back == ["shop (shop) of owner@example.com: no GitHub connection here"]
+    assert "held back" in report.summary()
 
 
 def test_a_box_with_a_different_github_app_refuses_and_writes_nothing(turso):
@@ -471,28 +651,136 @@ def test_reserved_slugs_match_the_web_apps():
 
 # ---------- telling people ----------
 
-def test_notify_emails_each_owner_of_newly_imported_projects_once(turso, monkeypatch):
-    online_world(turso)
-    sent = []
+@pytest.fixture
+def mail(monkeypatch):
+    """Email on; records what would go out. `fail` makes the next sends fail."""
+    box = types.SimpleNamespace(sent=[], fail=set(), pauses=[])
     monkeypatch.setattr(mailer, "RESEND_API_KEY", "re_test")
-    monkeypatch.setattr(mailer, "send", lambda to, subject, text, html=None:
-                        sent.append((to, text)) or True)
-    run(dry_run=True, notify=True)
-    assert sent == []                                          # never from a dry run
-    report = run(notify=True)
-    assert sorted(to for to, _ in sent) == ["ada@example.com", "owner@example.com"]
-    owner_text = dict(sent)["owner@example.com"]
+
+    def send(to, subject, text, html=None):
+        if to in box.fail:
+            mailer.last_error = "Resend answered 429: daily quota"
+            return False
+        box.sent.append((to, subject, text))
+        return True
+
+    monkeypatch.setattr(mailer, "send", send)
+    return box
+
+
+def notify(mail, **kw):
+    return import_online.notify(sleep=mail.pauses.append, **kw)
+
+
+def start(service_slug, deployed=False):
+    """What main.startup's admission (status 'deploying') or a deploy leaves behind."""
+    sid = db.one("SELECT id FROM services WHERE slug=?", (service_slug,))["id"]
+    db.q("UPDATE services SET status='deploying' WHERE id=?", (sid,))
+    if deployed:
+        db.q("INSERT INTO deployments(service_id,status,created_at) VALUES(?,'success',?)",
+             (sid, db.now()))
+
+
+def test_the_import_emails_nobody(turso, mail):
+    online_world(turso)
+    run()
+    run()
+    assert mail.sent == []
+
+
+def test_notify_tells_owners_once_their_projects_have_started_and_nobody_twice(turso, mail):
+    online_world(turso)
+    run()
+    first = notify(mail)
+    assert mail.sent == [] and first.not_started == 2         # nothing has started yet
+    start("shop")                                             # admitted at startup
+    start("blog", deployed=True)
+    report = notify(mail)
+    assert sorted(to for to, _, _ in mail.sent) == ["ada@example.com", "owner@example.com"]
+    owner_text = next(text for to, _, text in mail.sent if to == "owner@example.com")
+    assert "have started deploying" in owner_text and "being deployed" not in owner_text
     assert engine.service_url("shop") in owner_text and "blog" not in owner_text
-    assert "emailed 2 of 2" in report.mail
-    sent.clear()
-    run(notify=True)
-    assert sent == []                                          # nothing new, nobody twice
+    assert "emailed 2 of 2" in report.summary()
+    assert mail.pauses == [import_online.SEND_INTERVAL]      # paced under Resend's 2/s
+    mail.sent.clear()
+    assert notify(mail).owed == [] and mail.sent == []
 
 
-def test_notify_with_mail_off_says_nobody_was_emailed(turso, monkeypatch):
+def test_a_send_that_failed_is_owed_and_retried_next_time(turso, mail):
+    online_world(turso)
+    run()
+    start("shop")
+    start("blog")
+    mail.fail.add("owner@example.com")
+    report = notify(mail)
+    assert [to for to, _, _ in mail.sent] == ["ada@example.com"]
+    assert report.failed == ["owner@example.com"] and "429" in report.summary()
+    mail.fail.clear()
+    mail.sent.clear()
+    notify(mail)
+    assert [to for to, _, _ in mail.sent] == ["owner@example.com"]
+
+
+def test_notify_stops_when_every_send_fails(turso, mail):
+    for i in range(5):
+        turso.user(f"u{i}", f"u{i}@example.com")
+        turso.github(f"u{i}", 100 + i, f"u{i}")
+        turso.project(f"p{i}", f"u{i}", f"p{i}", f"p{i}", [(f"p{i}", f"p{i}", f"u{i}/r", "main")])
+    run()
+    for i in range(5):
+        start(f"p{i}")
+    mail.fail.update(f"u{i}@example.com" for i in range(5))
+    report = notify(mail)
+    assert report.stopped and len(report.failed) == import_online.FAILURES_IN_A_ROW
+    assert "run --notify again later" in report.summary()
+
+
+def test_notify_tells_nobody_who_cannot_deploy(turso, mail):
+    online_world(turso)
+    run()
+    start("blog", deployed=True)
+    db.q("UPDATE users SET created_at=? WHERE email='ada@example.com'", (db.now() - 40 * 86400,))
+    assert notify(mail).owed == [] and mail.sent == []
+
+
+def test_notify_with_mail_off_refuses_and_says_what_to_set(turso, monkeypatch):
+    online_world(turso)
+    run()
+    monkeypatch.setattr(mailer, "RESEND_API_KEY", "")
+    with pytest.raises(import_online.Refused, match="RESEND_API_KEY"):
+        import_online.notify()
+    start("blog")
+    assert import_online.notify(dry_run=True).owed == ["ada@example.com: blog"]
+
+
+def test_the_import_warns_loudly_when_mail_is_off(turso, monkeypatch):
     online_world(turso)
     monkeypatch.setattr(mailer, "RESEND_API_KEY", "")
-    assert "nobody was emailed" in run(notify=True).mail
+    assert "⚠ RESEND_API_KEY is empty here" in run(dry_run=True).summary()
+    monkeypatch.setattr(mailer, "RESEND_API_KEY", "re_test")
+    assert "RESEND_API_KEY is empty" not in run(dry_run=True).summary()
+
+
+# ---------- this box's limits ----------
+
+def test_the_import_prints_what_waits_against_the_limits_here(turso):
+    turso.user("u-a", "a@example.com")
+    turso.github("u-a", 1, "a")
+    turso.project("p", "u-a", "shop", "shop", [("shop", "shop", "a/shop", "main"),
+                                               ("api", "shop-api", "a/api", "main"),
+                                               ("worker", "shop-worker", "a/worker", "main")])
+    report = run(dry_run=True)
+    text = report.summary()
+    assert "capacity: 3 imported services wait to deploy" in text
+    assert "allows 40 services" in text and "8 more can run at 768MB each" in text
+    assert "a@example.com: 3 to deploy, their RAM quota (2048MB) runs 2: the rest wait" in text
+
+
+def test_the_import_says_when_the_instance_service_limit_is_passed(turso):
+    metrics.set_global_limits(2, 10, 6144)
+    online_world(turso)
+    text = run(dry_run=True).summary()
+    assert "over the instance's service limit" in text
 
 
 # ---------- the command ----------
@@ -506,6 +794,22 @@ def test_the_command_prints_a_summary_or_refuses_with_exit_1(turso, monkeypatch,
     monkeypatch.setenv("BETTER_AUTH_SECRET", "")
     assert import_online.main([]) == 1
     assert "import refused, nothing was written" in capsys.readouterr().err
+
+
+def test_the_command_notifies_only_when_asked_and_never_with_import_flags(
+        turso, mail, monkeypatch, capsys):
+    online_world(turso)
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    assert import_online.main([]) == 0 and mail.sent == []
+    start("blog")
+    assert import_online.main(["--notify", "--dry-run"]) == 0
+    assert "would be" in capsys.readouterr().out and mail.sent == []
+    monkeypatch.setattr(import_online, "SEND_INTERVAL", 0)
+    assert import_online.main(["--notify"]) == 0
+    assert [to for to, _, _ in mail.sent] == ["ada@example.com"]
+    with pytest.raises(SystemExit):
+        import_online.main(["--notify", "--link-existing"])
 
 
 def test_the_command_will_not_conjure_a_database(tmp_path, monkeypatch, capsys):
@@ -535,10 +839,26 @@ def test_startup_deploys_only_imported_services_never_deployed(turso, monkeypatc
     db.q("INSERT INTO services(project_id,name,slug,repo_full,created_at) VALUES(?,?,?,?,?)",
          (native, "native", "native", "acme/native", db.now()))
 
+    started = boot(monkeypatch)
+    shop = [s["id"] for s in db.all_(
+        "SELECT s.id FROM services s JOIN projects p ON p.id=s.project_id "
+        "WHERE p.external_id='p-shop' ORDER BY s.id")]
+    assert started == [(sid, "import") for sid in shop]
+    # Reserved as admitted: --notify counts them as started, the next start does not
+    # start them twice, and the RAM checks of later services count them.
+    assert {s["status"] for s in db.all_("SELECT status FROM services WHERE id IN (?,?)",
+                                         tuple(shop))} == {"deploying"}
+
+
+def boot(monkeypatch) -> list[tuple[int, str]]:
+    """main.startup with Docker, the watchdog and the event bus out of the way."""
     started = []
 
     async def fake_deploy(service_id, trigger="manual"):
         started.append((service_id, trigger))
+        # what engine._deploy_sync does first
+        db.q("INSERT INTO deployments(service_id,trigger,status,created_at) "
+             "VALUES(?,?,'success',?)", (service_id, trigger, db.now()))
 
     async def idle():
         return None
@@ -550,13 +870,104 @@ def test_startup_deploys_only_imported_services_never_deployed(turso, monkeypatc
     monkeypatch.setattr(main.watchdog, "run_forever", idle)
     monkeypatch.setattr(main.watchdog, "attach_loop", lambda loop: None)
     monkeypatch.setattr(main.bus, "attach_loop", lambda loop: None)
+    monkeypatch.setattr(main.bus, "_loop", None)
+    monkeypatch.setattr(metrics, "ensure_fresh", lambda: None)
 
-    async def boot():
+    async def go():
         await main.startup()
         await asyncio.sleep(0)
 
-    asyncio.run(boot())
-    shop = [s["id"] for s in db.all_(
-        "SELECT s.id FROM services s JOIN projects p ON p.id=s.project_id "
-        "WHERE p.external_id='p-shop' ORDER BY s.id")]
-    assert started == [(sid, "import") for sid in shop]
+    asyncio.run(go())
+    return started
+
+
+def three_service_world(t: FakeTurso):
+    t.user("u-a", "a@example.com")
+    t.github("u-a", 1, "a")
+    t.project("p", "u-a", "shop", "shop", [("shop", "shop", "a/shop", "main"),
+                                           ("api", "shop-api", "a/api", "main"),
+                                           ("worker", "shop-worker", "a/worker", "main")])
+
+
+def test_startup_leaves_what_does_not_fit_the_quota_waiting_and_says_why(
+        turso, monkeypatch, capsys):
+    """The RAM quota runs 2 services at 768MB: all three at once would fail the third
+    in the pipeline, mark it failed and email its owner, with no retry."""
+    three_service_world(turso)
+    run()
+    started = boot(monkeypatch)
+    ids = [s["id"] for s in db.all_("SELECT id FROM services ORDER BY id")]
+    assert started == [(ids[0], "import"), (ids[1], "import")]
+    worker = db.one("SELECT * FROM services WHERE id=?", (ids[2],))
+    assert worker["status"] == "new"
+    assert count("deployments") == 2
+    assert "import: shop-worker waits: RAM quota exceeded" in capsys.readouterr().out
+    # The admin raises the quota; the next start picks it up, and nothing twice.
+    db.q("UPDATE users SET quota_ram_mb=4096 WHERE email='a@example.com'")
+    assert boot(monkeypatch) == [(ids[2], "import")]
+
+
+def test_startup_respects_the_instance_limits(turso, monkeypatch, capsys):
+    online_world(turso)
+    run()
+    metrics.set_global_limits(2, 10, 6144)                    # the box holds 3 services
+    assert boot(monkeypatch) == []
+    assert "Instance-wide service limit reached" in capsys.readouterr().out
+    assert {s["status"] for s in db.all_("SELECT status FROM services")} == {"new"}
+
+
+def test_startup_holds_back_an_owner_without_a_github_connection(turso, monkeypatch, capsys):
+    online_world(turso)
+    run()
+    owner = box_user("owner@example.com")["id"]
+    db.q("DELETE FROM github_connections WHERE user_id=?", (owner,))
+    started = boot(monkeypatch)
+    blog = db.one("SELECT id FROM services WHERE slug='blog'")["id"]
+    assert started == [(blog, "import")]
+    assert "import: shop waits: its owner has no GitHub connection here" in capsys.readouterr().out
+
+
+def test_a_push_never_deploys_an_imported_service_before_startup_has(turso, client, monkeypatch):
+    online_world(turso)
+    run()
+    deployed = []
+
+    async def fake_deploy(service_id, trigger="manual"):
+        deployed.append(service_id)
+
+    monkeypatch.setattr(main.engine, "deploy", fake_deploy)
+    monkeypatch.setattr(main.bus, "_loop", None)
+    body = b'{"ref":"refs/heads/main","after":"abc","repository":{"full_name":"ada/blog"}}'
+    signed = {"X-GitHub-Event": "push", "X-Hub-Signature-256": "sha256=" + hmac.new(
+        b"hook-secret", body, hashlib.sha256).hexdigest()}            # the imported App's
+    r = client.post("/api/webhooks/github", content=body, headers=signed)
+    assert r.json()["deployed"] == []
+    blog = db.one("SELECT id FROM services WHERE slug='blog'")["id"]
+    db.q("INSERT INTO deployments(service_id,status,created_at) VALUES(?,'success',?)",
+         (blog, db.now()))
+    r = client.post("/api/webhooks/github", content=body, headers=signed)
+    assert r.json()["deployed"] == ["blog"]
+
+
+# ---------- sign-ups wait for the import ----------
+
+def test_sign_ups_wait_while_the_online_workspace_is_still_to_come(turso, client, monkeypatch):
+    monkeypatch.setenv("TURSO_DATABASE_URL", ENV["TURSO_DATABASE_URL"])
+    page = client.get("/signup")
+    assert "Sign-ups open shortly" in page.text and 'action="/signup"' not in page.text
+    r = client.post("/signup", data={"email": "early@example.com", "password": "long enough"},
+                    follow_redirects=False)
+    assert r.status_code == 200 and box_user("early@example.com") is None
+    turso.user("u-ada", "ada@example.com")
+    run(dry_run=True)                                         # a dry run commits nothing
+    assert "Sign-ups open shortly" in client.get("/signup").text
+    run()
+    assert 'action="/signup"' in client.get("/signup").text
+    r = client.post("/signup", data={"email": "late@example.com", "password": "long enough"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and box_user("late@example.com") is not None
+
+
+def test_without_an_online_workspace_sign_ups_are_open(client, monkeypatch):
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    assert 'action="/signup"' in client.get("/signup").text

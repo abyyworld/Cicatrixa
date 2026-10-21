@@ -6,8 +6,14 @@
 // connection does not keep, so every delete below is spelled out.
 import { decryptSetting, encryptSetting } from "./secrets.js";
 
+// accounts/auth.js writes a password proof here (recordPasswordProof), possibly before
+// the workspace's function has ever run, so it creates this one table itself.
+export const SETTING_TABLE = `create table if not exists cx_setting (key text primary key, value text not null, updatedAt text not null)`;
+// cx_setting key of an account's password proof: pw_proof:<userId>, value an ISO time.
+export const PROOF_PREFIX = "pw_proof:";
+
 export const WORKSPACE_SCHEMA = [
-  `create table if not exists cx_setting (key text primary key, value text not null, updatedAt text not null)`,
+  SETTING_TABLE,
   // One installation is bound to one account, ever (unique), and an account has one.
   `create table if not exists cx_github (userId text not null primary key references "user"("id") on delete cascade, installationId integer not null unique, accountLogin text not null, accountType text not null, provedBy text not null, createdAt text not null)`,
   `create table if not exists cx_project (id text primary key, userId text not null references "user"("id") on delete cascade, name text not null, slug text not null unique, createdAt text not null)`,
@@ -43,9 +49,13 @@ export const SECRET_SETTINGS = ["gh_app_pem", "gh_app_webhook_secret", "gh_app_c
 export const APP_SETTINGS = ["gh_app_id", "gh_app_slug", "gh_app_name", "gh_app_client_id",
                              ...SECRET_SETTINGS];
 
+// The App's settings. Password proofs share the table (one row per account that ever
+// reset its password) but are no setting: they are read one at a time (passwordProof).
 export async function getSettings(client, secret) {
   const out = {};
-  for (const { key, value } of await all(client, "select key, value from cx_setting")) {
+  for (const { key, value } of await all(client, "select key, value from cx_setting " +
+                                                 `where substr(key, 1, ${PROOF_PREFIX.length}) <> ?`,
+                                         [PROOF_PREFIX])) {
     out[key] = decryptSetting(secret, value);
   }
   return out;
@@ -68,6 +78,29 @@ export async function saveAppSettings(client, secret, values, now = Date.now()) 
     });
   }
   await client.batch(stmts, "write");
+}
+
+// ---------- password proofs (who may be an admin) ----------
+
+// A row says the account's password was last set through an emailed reset link, so the
+// person who holds the password also reads the inbox. A confirmation link proves less:
+// whoever signed up chose the password, and anyone who reads the inbox can click it.
+// `python -m app.import_online` reads the same rows to decide the platform's is_admin.
+export async function recordPasswordProof(client, userId, now = Date.now()) {
+  const at = iso(now);
+  await client.batch([
+    SETTING_TABLE,
+    { sql: "insert into cx_setting (key, value, updatedAt) values (?, ?, ?) " +
+           "on conflict(key) do update set value = excluded.value, updatedAt = excluded.updatedAt",
+      args: [PROOF_PREFIX + userId, at, at] },
+  ], "write");
+}
+
+// The time of the proof (ISO), or null.
+export async function passwordProof(client, userId) {
+  const row = await one(client, "select value from cx_setting where key = ?",
+                        [PROOF_PREFIX + userId]);
+  return row ? row.value : null;
 }
 
 // ---------- GitHub connections ----------
@@ -120,17 +153,29 @@ export async function countUserServices(client, userId) {
 }
 
 // project: {id, userId, name, slug}; services: [{id, name, slug, repoFull, branch, isPrimary}]
-export async function insertProject(client, project, services, now = Date.now()) {
+// The cap is checked inside the write: the caller's own count is stale by the time GitHub
+// has answered, and requests sent side by side all pass it. A write transaction
+// runs alone, so the project goes in only if the account's services plus these fit
+// under maxServices, and each service only if its project went in. false: over the cap,
+// nothing written.
+export async function insertProject(client, project, services,
+                                    { maxServices = Number.MAX_SAFE_INTEGER, now = Date.now() } = {}) {
   const at = iso(now);
-  await client.batch([
-    { sql: "insert into cx_project (id, userId, name, slug, createdAt) values (?, ?, ?, ?, ?)",
-      args: [project.id, project.userId, project.name, project.slug, at] },
+  const rs = await client.batch([
+    { sql: "insert into cx_project (id, userId, name, slug, createdAt) select ?, ?, ?, ?, ? " +
+           "where (select count(*) from cx_service s join cx_project p on p.id = s.projectId " +
+           "where p.userId = ?) + ? <= ?",
+      args: [project.id, project.userId, project.name, project.slug, at, project.userId,
+             services.length, maxServices] },
     ...services.map((s) => ({
       sql: "insert into cx_service (id, projectId, name, slug, repoFull, branch, isPrimary, " +
-           "status, updatedAt, createdAt) values (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)",
-      args: [s.id, project.id, s.name, s.slug, s.repoFull, s.branch, s.isPrimary ? 1 : 0, at, at],
+           "status, updatedAt, createdAt) select ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ? " +
+           "where exists (select 1 from cx_project where id = ?)",
+      args: [s.id, project.id, s.name, s.slug, s.repoFull, s.branch, s.isPrimary ? 1 : 0, at, at,
+             project.id],
     })),
   ], "write");
+  return rs[0].rowsAffected === 1;
 }
 
 export async function listProjects(client, userId) {

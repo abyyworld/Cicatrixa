@@ -15,7 +15,7 @@ from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
 from fastapi.templating import Jinja2Templates
 
 from . import (ai, auth, billing, bus, db, dbprovision, engine, flywheel, gh,
-               invites, mailer, medic, metrics, referrals, watchdog)
+               import_online, invites, mailer, medic, metrics, referrals, watchdog)
 
 BASE_DOMAIN = os.environ.get("BASE_DOMAIN", "localhost")
 BASE_URL = os.environ.get("BASE_URL", f"http://{BASE_DOMAIN}")
@@ -128,19 +128,55 @@ async def startup():
              "log=log || char(10) || '✗ interrupted by platform restart — retrying' "
              "WHERE id=?", (db.now(), o["id"]))
         asyncio.create_task(engine.deploy(o["service_id"], trigger="retry"))
-    # Projects brought over from the online workspace (python -m app.import_online)
-    # were planned there and never built: start them, as create_project would have,
-    # for owners still allowed to deploy. Nothing else starts a first deploy — the
-    # watchdog only looks after services that were live once. A service with any
-    # deployment has been tried here, and is its owner's to retry.
-    for s in db.all_("SELECT s.id, p.user_id FROM services s "
-                     "JOIN projects p ON p.id=s.project_id "
-                     "WHERE p.external_id IS NOT NULL AND s.status='new' AND NOT EXISTS "
-                     "(SELECT 1 FROM deployments d WHERE d.service_id=s.id) ORDER BY s.id"):
-        owner = db.one("SELECT * FROM users WHERE id=?", (s["user_id"],))
-        if owner and referrals.can_deploy(owner)[0]:
-            asyncio.create_task(engine.deploy(s["id"], "import"))
+    for service_id in await asyncio.to_thread(_admit_imported):
+        asyncio.create_task(engine.deploy(service_id, "import"))
     asyncio.create_task(watchdog.run_forever())
+
+
+def _admit_imported() -> list[int]:
+    """Services brought over from the online workspace (python -m app.import_online)
+    were planned there and never built: start them, as create_project would have.
+    This is the one place they first deploy — the watchdog only looks after services
+    that were live once, and a push leaves them alone (github_webhook). A service with
+    any deployment has been tried here, and is its owner's to retry.
+
+    Each passes what create_project and the deploy itself would ask first: an owner
+    allowed to deploy, with a GitHub connection, within the account's and the
+    instance's limits. One that does not stays 'new' with the reason in the log, and
+    the next start tries again — after /admin raises a limit, say. All at once on a
+    fresh box, the RAM gate would otherwise fail every one past the limit and email
+    its owner about it."""
+    admitted, projects = [], set()
+    for s in db.all_("SELECT s.*, p.user_id FROM services s JOIN projects p "
+                     "ON p.id=s.project_id WHERE p.external_id IS NOT NULL AND "
+                     + import_online.WAITING + " ORDER BY s.id"):
+        owner = db.one("SELECT * FROM users WHERE id=?", (s["user_id"],))
+        why = _cannot_start_imported(owner)
+        if not why:
+            # Reserved first, as its own deploy will be: the RAM check then counts
+            # it and everything admitted before it, exactly as engine's will.
+            db.q("UPDATE services SET status='deploying' WHERE id=?", (s["id"],))
+            why = metrics.check_deploy_quota(owner, s)
+        if why:
+            db.q("UPDATE services SET status='new' WHERE id=?", (s["id"],))
+            print(f"import: {s['slug']} waits: {why}", flush=True)
+            continue
+        admitted.append(s["id"])
+        projects.add(s["project_id"])
+    for pid in projects:
+        engine.refresh_project_status(pid)
+    return admitted
+
+
+def _cannot_start_imported(owner) -> str | None:
+    if not owner:
+        return "its owner is gone"
+    ok, why = referrals.can_deploy(owner)
+    if not ok:
+        return why
+    if not db.one("SELECT 1 FROM github_connections WHERE user_id=?", (owner["id"],)):
+        return "its owner has no GitHub connection here"
+    return metrics.check_service_count(owner, extra=0)
 
 
 # ---------- public pages ----------
@@ -162,13 +198,25 @@ async def privacy_page(request: Request):
                   page_title="Privacy Policy", kicker="what we know and why")
 
 
+def signups_wait_for_import() -> bool:
+    """Nobody signs up here while the online workspace is still to come.
+
+    Its database is set (TURSO_DATABASE_URL) and no import has committed: every
+    address with an account online is still on its way, and the box answers on any
+    host name once `*` points at it. A sign-up here first would sit on that address,
+    and with email off it would even be confirmed without proof."""
+    return (bool(os.environ.get("TURSO_DATABASE_URL", "").strip())
+            and not db.setting(import_online.IMPORTED_KEY))
+
+
 @app.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, invite: str = "", ref: str = ""):
     """Open signup — everyone gets a 14-day free trial. A ?ref= link
     additionally ties the account to its referrer for the quota bonus."""
     referrer = referrals.referrer_for(ref) if ref else None
     return render(request, "signup.html", error=None, ref_code=ref if referrer else "",
-                  referrer_email=referrer["email"] if referrer else "")
+                  referrer_email=referrer["email"] if referrer else "",
+                  waiting=signups_wait_for_import())
 
 
 @app.post("/signup")
@@ -178,8 +226,11 @@ async def signup(request: Request, email: str = Form(...), password: str = Form(
 
     def fail(msg):
         return render(request, "signup.html", error=msg, ref_code=ref_code,
-                      referrer_email="")
+                      referrer_email="", waiting=False)
 
+    if signups_wait_for_import():
+        return render(request, "signup.html", error=None, ref_code=ref_code,
+                      referrer_email="", waiting=True)
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return fail("That doesn't look like an email.")
     if len(password) < 8:
@@ -832,6 +883,15 @@ async def connect_setup(request: Request):
         return RedirectResponse("/connect/github?" + urlencode({"error": why}),
                                 status_code=303)
 
+    # An organisation member asked for an install: GitHub sent the request to its
+    # owners, and there is no installation yet. Binding anything here (a personal
+    # installation the code happens to show) is not what they asked for, and a plain
+    # member can never connect the organisation's installation — an owner does, from
+    # their own account. It binds nothing, so it needs no state (as workspace/routes.js).
+    if params.get("setup_action") == "request":
+        return refuse("GitHub sent your request to the organisation's owners. Once one of "
+                      "them approves it, that owner connects it from their own Cicatrixa "
+                      "account — or install the App on your own GitHub account instead.")
     if auth.gh_state_user_id(params.get("state")) != user["id"]:
         return refuse("That GitHub link was not started from this account. "
                       "Connect from this page.")
@@ -1152,10 +1212,13 @@ async def github_webhook(request: Request):
         return {"ok": True, "human_commits": human}
     repo_full, branch, sha = parsed
     triggered = []
+    # An imported service that never deployed waits for startup's admission (quotas,
+    # a GitHub connection: _admit_imported), not for whoever pushes first.
     for s in db.all_(
             "SELECT s.id, s.slug, s.name, s.project_id FROM services s "
             "JOIN projects p ON p.id=s.project_id "
-            "WHERE s.repo_full=? AND s.branch=? AND p.autodeploy=1",
+            "WHERE s.repo_full=? AND s.branch=? AND p.autodeploy=1 AND (p.external_id IS "
+            "NULL OR EXISTS (SELECT 1 FROM deployments d WHERE d.service_id=s.id))",
             (repo_full, branch)):
         bus.publish(f"project:{s['project_id']}", "log",
                     {"line": f"⟳ webhook: push {sha[:10]} to {repo_full}@{branch} "

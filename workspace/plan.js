@@ -7,6 +7,8 @@
 // make: the same tree, the same key files, the same prompt, byte for byte.
 // workspace/test/plan.test.js checks that against the Python code itself.
 
+import { MAX_FILE_BYTES } from "./github.js";
+
 // ---------- what the platform reads (engine.py) ----------
 
 export const KEY_FILES = Object.freeze([
@@ -461,6 +463,9 @@ function insideRepo(relpath) {
 
 // Everything the platform does between "cloning" and "build attempt 1/3", through the
 // GitHub API: gh is {repoInfo, branchHead, getTree, readFile} (workspace/github.js).
+// One difference: a file over MAX_FILE_BYTES is not read (logged "skipped … (over
+// 1 MB)") and counts as not found, where the platform reads its clone whole. Its size
+// comes from the tree when GitHub gives one; otherwise readFile refuses it (status 413).
 // log(line) gets the platform's lines without the time stamp. `now` is the time the
 // request started (epoch ms) or a clock; the AI is given until 52 s after it unless
 // deadlineMs says otherwise. `name` is the service's name (default: from the repo).
@@ -477,10 +482,25 @@ export async function analyze({ token, repoFull, branch, siblings = [], env = pr
   const sha = await gh.branchHead(token, repoFull, branch);
   log(`  at commit ${String(sha).slice(0, 10)}`);
 
-  const { paths, truncated } = await gh.getTree(token, repoFull, sha);
+  const { paths, sizes, truncated } = await gh.getTree(token, repoFull, sha);
   const blobs = new Set(paths);
   const tree = snapshotTree(paths);
   const view = rootFiles(paths);
+
+  // A file at the commit, or null when it is not there or too big to read; SKIPPED
+  // when it was too big, so the caller can say so.
+  const SKIPPED = Symbol("skipped");
+  const tooBig = (path) => sizes instanceof Map && sizes.get(path) > MAX_FILE_BYTES;
+  const readAt = async (path) => {
+    if (tooBig(path)) return SKIPPED;
+    try {
+      return await gh.readFile(token, repoFull, path, sha);
+    } catch (err) {
+      if (err?.status === 413) return SKIPPED;
+      throw err;
+    }
+  };
+  const skipped = (path) => log(`  skipped ${path} (over ${MAX_FILE_BYTES / 1024 / 1024} MB)`);
 
   // Key files that exist at the root, read at the commit. GitHub cuts the recursive
   // tree of a huge repo short, and then a root file may be missing from it: ask for
@@ -488,8 +508,14 @@ export async function analyze({ token, repoFull, branch, siblings = [], env = pr
   const texts = new Map();
   const probe = truncated ? [...KEY_FILES, "run.py"].filter((n) => !view.has(n)) : [];
   const reads = [...KEY_FILES.filter((n) => blobs.has(n)), ...probe];
-  const contents = await Promise.all(reads.map((n) => gh.readFile(token, repoFull, n, sha)));
+  const contents = await Promise.all(reads.map(readAt));
   reads.forEach((n, i) => {
+    if (contents[i] === SKIPPED) {
+      // It is in the repo, so has() stays true, as on the platform; its text is unread.
+      skipped(n);
+      if (probe.includes(n)) blobs.add(n);
+      return;
+    }
     if (contents[i] === null || contents[i] === undefined) return;
     texts.set(n, pyText(contents[i]));
     blobs.add(n);
@@ -509,7 +535,11 @@ export async function analyze({ token, repoFull, branch, siblings = [], env = pr
       // be missing a real file.
       if (!truncated || paths.some((p) => p.startsWith(`${rel}/`))) return null;
     }
-    const text = await gh.readFile(token, repoFull, rel, sha);
+    const text = await readAt(rel);
+    if (text === SKIPPED) {
+      skipped(rel);
+      return null;
+    }
     return text === null || text === undefined ? null : cut(pyText(text), 8000);
   };
 

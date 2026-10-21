@@ -60,8 +60,9 @@ def test_no_certificate_order_includes_the_apex():
         assert hosts == ["app.${BASE_DOMAIN}"], f"{router} orders a cert for {hosts}"
 
 
-def test_builds_are_memory_capped(engine, monkeypatch):
+def test_builds_are_memory_capped(engine, monkeypatch, tmp_path):
     e = _reload(monkeypatch, BUILD_MEM_MB="1536")
+    (tmp_path / "Dockerfile").write_text("FROM scratch\n")
     seen = {}
 
     class API:
@@ -73,7 +74,7 @@ def test_builds_are_memory_capped(engine, monkeypatch):
         api = API()
 
     monkeypatch.setattr(e, "dock", lambda: Client())
-    e._build("/tmp", "Dockerfile", "cx-shop:abc", lambda _l: None)
+    e._build(str(tmp_path), "Dockerfile", "cx-shop:abc", lambda _l: None)
     cap = 1536 * 1024 * 1024
     assert seen["container_limits"] == {"memory": cap, "memswap": cap}
 

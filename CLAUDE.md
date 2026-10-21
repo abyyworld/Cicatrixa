@@ -220,3 +220,16 @@ freezes every request in the process.
   or above. `insert_transform` enforces it; nothing promotes automatically yet.
 - New schema goes in `db.MIGRATIONS` as a `Migration` with a real `down`. Never in the
   legacy block — that one still swallows errors and only exists to reach parity on old DBs.
+- A checkout never holds a credential. `engine.clone_repo` hands git the token as a per-command
+  header (so `.git/config` has none), every path the AI or the medic names goes through
+  `engine.inside_checkout` (refuses `.git`, also via symlinks), and the build context and the
+  medic's test copy leave `.git` out — the static plan's `COPY .` would otherwise publish it.
+- Online admin = an `ADMIN_EMAILS` address, confirmed, AND a password set through an emailed reset
+  link (`pw_proof:<userId>` in `cx_setting`). A confirmation click alone proves only the inbox, not
+  who chose the password: whoever signed up first with the owner's address did. The import grants
+  platform admin on the same proof.
+- The online workspace's redirects carry `?error=<code>` from `routes.ERROR_CODES` only; the pages
+  map codes to sentences and never print query text.
+- `import_online` writes rows and emails nobody; `--notify` is its own later step. Until an import
+  has committed, a box with `TURSO_DATABASE_URL` set refuses sign-ups, and the import never merges
+  into an existing box account without `--link-existing` (both sides confirmed).
