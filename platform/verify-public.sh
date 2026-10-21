@@ -17,8 +17,9 @@
 # is, and deploy.sh / recover.sh follow up with a real check from outside.
 #
 # VERIFY_ALLOW_RESTART=1 lets it restart Traefik once to retry a certificate
-# request that failed before DNS was ready. Only bootstrap.sh sets it: on a box
-# with customer apps, restarting Traefik drops every one of them.
+# request that failed before DNS was ready. Only bootstrap.sh sets it, and
+# docs/RUNBOOK.md "Leaving Vercel" before the imported apps deploy: on a box with
+# customer apps, restarting Traefik drops every one of them.
 set -uo pipefail
 
 cd "$(dirname "$0")"

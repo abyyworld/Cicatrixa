@@ -73,6 +73,11 @@ def trial_days_left(user) -> int:
     return max(0, int(left) + (1 if left % 1 > 0 else 0))
 
 
+# can_deploy's refusal, and the sentence main.ERRORS["trial_over"] shows for it.
+TRIAL_OVER = ("Your 14-day trial has ended. Subscribe ($2.99/project/mo) to "
+              "keep deploying — your running services stay up either way.")
+
+
 def can_deploy(user) -> tuple[bool, str]:
     """Deploy gate: admins always, paid users always, trial users until day 14.
     Running services are never touched — this only gates new work."""
@@ -80,5 +85,4 @@ def can_deploy(user) -> tuple[bool, str]:
         return True, ""
     if db.now() <= trial_ends_at(user):
         return True, ""
-    return False, ("Your 14-day trial has ended. Subscribe ($2.99/project/mo) to "
-                   "keep deploying — your running services stay up either way.")
+    return False, TRIAL_OVER

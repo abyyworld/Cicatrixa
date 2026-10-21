@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>New project — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/workspace.js" defer></script>
+</head>
+<body data-page="new-project">
+<header class="masthead"><div class="wrap nav ws">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <nav class="links" id="links" aria-label="Workspace" hidden>
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    <a class="lnk" href="/admin" id="admin-link" hidden>Admin</a>
+    <a class="lnk" href="/demo">Demo</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <button id="signout" class="btn ghost sm" type="button" hidden>Log out</button>
+</div></header>
+<main><div class="wrap">
+<div id="fatal" class="err" hidden></div>
+<div id="page" class="medium" hidden>
+  <div class="lbl-caps">get deploying</div>
+  <h1>New <em>project</em></h1>
+  <p class="sub">Pick one repo — or several (frontend + backend + …). Each repo becomes its own
+    service with its own subdomain, and services get env vars pointing at each other.</p>
+  <div id="notice" class="ok" hidden></div>
+  <div id="error" class="err" hidden></div>
+
+  <form id="form" class="card" novalidate>
+    <div class="row between tight list-head">
+      <label class="flush">repositories <span class="aside">(check all that belong to this project)</span></label>
+      <div class="row tight">
+        <button type="button" id="refresh-btn" class="btn ghost sm" title="Reload the repo list from GitHub">↻ refresh</button>
+        <a id="add-repos" class="btn ghost sm" href="/connect/github/start" target="_blank">+ add repos ↗</a>
+      </div>
+    </div>
+    <div id="gh-hint" class="hint above" hidden>
+      GitHub opened in a new tab. Select repos there, click <strong>Save</strong>, then come back
+      here — the list updates automatically when you return to this tab.
+      <a href="#" id="refresh-now">refresh now →</a>
+    </div>
+
+    <input type="text" id="filter-input" placeholder="filter repos…" aria-label="filter repos" autocomplete="off" class="filter">
+    <div id="repolist" class="repolist">
+      <div id="repo-loading" class="repo-empty muted">loading your repositories…</div>
+      <div id="empty-msg" class="repo-empty muted" hidden>No repos connected yet. Click "+ add
+        repos ↗" above to install Cicatrixa on your GitHub repos.</div>
+    </div>
+
+    <p class="muted xs note">the service marked <b>main</b> gets
+      <span class="green">&lt;project&gt;.cicatrixa.com</span>; the rest get
+      <span class="green">&lt;project&gt;-&lt;repo&gt;.cicatrixa.com</span> — reserved now, live
+      when deploying opens</p>
+
+    <label for="name">project name <span class="aside">(optional — becomes the subdomain)</span></label>
+    <input type="text" id="name" name="name" placeholder="my-app" maxlength="80" autocomplete="off">
+    <label for="branch">branch <span class="aside">(optional — blank uses each repo's default branch)</span></label>
+    <input type="text" id="branch" name="branch" maxlength="200" autocomplete="off">
+    <div class="row submit-row">
+      <button class="btn" type="submit" id="deploy-btn">Analyze &amp; plan →</button>
+      <span class="muted xs" id="quota"></span>
+    </div>
+  </form>
+</div>
+</div></main>
+</body>
+</html>

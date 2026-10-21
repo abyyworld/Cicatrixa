@@ -5,6 +5,7 @@ import hmac
 import os
 import secrets
 import time
+import unicodedata
 
 from . import db
 
@@ -41,7 +42,12 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
+    """Checks the platform's own hashes, and Better Auth's: accounts made on the
+    online workspace (app.import_online) keep their passwords unchanged. The two
+    cannot be confused — base64 never holds ':' and hex never holds '$'."""
     try:
+        if "$" not in stored and ":" in stored:
+            return _verify_better_auth(password, stored)
         salt_b64, dk_b64 = stored.split("$", 1)
         salt = base64.b64decode(salt_b64)
         expected = base64.b64decode(dk_b64)
@@ -49,6 +55,18 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(dk, expected)
     except Exception:
         return False
+
+
+def _verify_better_auth(password: str, stored: str) -> bool:
+    """Better Auth 1.x (@better-auth/utils/password): `<salt hex>:<key hex>`, scrypt
+    N=16384 r=16 p=1 over the NFKC form of the password, 64-byte key. The salt is
+    the hex TEXT itself, not the bytes it spells. r=16 needs 32 MiB, over hashlib's
+    default memory limit, which would fail every check."""
+    salt_hex, key_hex = stored.split(":", 1)
+    dk = hashlib.scrypt(unicodedata.normalize("NFKC", password).encode(),
+                        salt=salt_hex.encode(), n=2 ** 14, r=16, p=1, dklen=64,
+                        maxmem=64 * 1024 * 1024)
+    return hmac.compare_digest(dk, bytes.fromhex(key_hex))
 
 
 def _sign(payload: str) -> str:

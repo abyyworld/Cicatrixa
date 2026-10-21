@@ -1,5 +1,6 @@
-// Account pages: talks to Better Auth at /api/auth (api/auth.js). Every page names
-// itself in <body data-page="…">; dynamic text goes in with textContent only.
+// Account pages (sign up, log in, forgot and reset password): talks to Better Auth at
+// /api/auth (api/auth.js). Every page names itself in <body data-page="…">; dynamic text
+// goes in with textContent only. The signed-in pages are workspace.js's.
 (() => {
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
@@ -53,10 +54,16 @@
     });
   }
 
-  // A path on this site only: anything else could send people to another host.
+  // A path on this site only, query included (/project?id=…, /connect/github): anything
+  // else could send people to another host. Resolved the way the browser will resolve
+  // it, so //host, /\host and tabs or newlines it strips cannot slip past.
   function safeNext(value) {
-    return value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
-      ? value : "/dashboard";
+    if (!value || !value.startsWith("/")) return "/dashboard";
+    try {
+      const url = new URL(value, location.origin);
+      if (url.origin === location.origin) return url.pathname + url.search + url.hash;
+    } catch { /* not a URL */ }
+    return "/dashboard";
   }
 
   const linkError = () => {
@@ -70,7 +77,9 @@
         const email = String(f.get("email")).trim();
         const r = await api("/sign-up/email", {
           email, password: f.get("password"), name: email.split("@")[0],
-          callbackURL: "/dashboard?welcome=1",
+          // Where the confirmation link lands: it opens no session (accounts/auth.js), so
+          // the person logs in there with their own password.
+          callbackURL: "/login?verified=1",
         });
         if (!r.ok) return show("error", problem(r));
         if (r.data?.token) return location.assign("/dashboard?welcome=1");   // email is off
@@ -81,16 +90,29 @@
     },
 
     login() {
-      if (params.get("reset")) show("notice", "Password changed — log in with the new one.");
-      show("error", linkError() && `${linkError()} Log in and we'll send you a new one.`);
+      // A confirmation link that failed lands here with ?verified=1&error=…: the error wins.
+      if (linkError()) show("error", `${linkError()} Log in and we'll send you a new one.`);
+      else if (params.get("verified")) show("notice", "Email confirmed — log in.");
+      else if (params.get("reset")) show("notice", "Password changed — log in with the new one.");
       onSubmit($("form"), async (f) => {
         const r = await api("/sign-in/email", {
           email: String(f.get("email")).trim(), password: f.get("password"),
           // Where the fresh confirmation link lands if the email is not confirmed yet.
-          rememberMe: true, callbackURL: "/dashboard?welcome=1",
+          rememberMe: true, callbackURL: "/login?verified=1",
         });
-        if (!r.ok) return show("error", problem(r));
-        location.assign(safeNext(params.get("next")));
+        if (!r.ok) {
+          // Straight from a confirmation link, a refused password can mean someone else
+          // signed up with this address first: then the person's own sign-up mailed a
+          // second link, which sets their password (accounts/auth.js onExistingUserSignUp).
+          if (params.get("verified") && r.data?.code === "INVALID_EMAIL_OR_PASSWORD") {
+            return show("error", "Wrong email or password. If you got two emails from us, " +
+                        "the newest one sets your password — or reset it below.");
+          }
+          return show("error", problem(r));
+        }
+        // Straight from a confirmation link, the dashboard says welcome.
+        const next = params.get("next") || (params.get("verified") ? "/dashboard?welcome=1" : "");
+        location.assign(safeNext(next));
       });
     },
 
@@ -124,22 +146,6 @@
           return show("error", problem(r));
         }
         location.assign("/login?reset=1");
-      });
-    },
-
-    async dashboard() {
-      const r = await api("/get-session");
-      if (!r.ok || !r.data?.user) {
-        const e = params.get("error");
-        return location.replace(e ? `/login?error=${encodeURIComponent(e)}` : "/login");
-      }
-      $("email").textContent = r.data.user.email;
-      $("notify-email").textContent = r.data.user.email;
-      if (params.get("welcome")) show("notice", "Email confirmed — welcome to Cicatrixa.");
-      $("account").hidden = false;
-      $("signout").addEventListener("click", async () => {
-        await api("/sign-out", {});
-        location.assign("/login");
       });
     },
   };

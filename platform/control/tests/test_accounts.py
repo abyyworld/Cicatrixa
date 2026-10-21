@@ -1,5 +1,6 @@
 """Signing up, signing in, and getting back in after forgetting the password —
 through the real routes, against a real database, with email stubbed out."""
+import os
 import time
 
 import pytest
@@ -511,6 +512,24 @@ def test_a_link_started_by_someone_else_binds_nothing(client, monkeypatch):
     assert "error=" in r.headers["location"] and connections(777) == []
 
 
+def test_an_install_request_waiting_for_an_organisations_owners_binds_nothing(
+        client, monkeypatch):
+    """GitHub sends a member who asked their organisation back with setup_action=request
+    and no installation. The code would show their own free installation; that is not
+    what they asked for, so nothing is bound, with or without a state."""
+    uid = make_user()
+    monkeypatch.setattr(gh, "installations_user_controls",
+                        lambda code: {5: {"created_at": "2026-01-01T00:00:00Z"}})
+    signed_in(client, uid)
+    for params in ({"code": "abc", "setup_action": "request"},
+                   {"setup_action": "request"}):
+        for r in (callback(client, uid, **params), callback(client, **params)):
+            assert r.headers["location"] == "/connect/github?error=org_request"
+    assert "GitHub sent your request to the organisation" in client.get(
+        "/connect/github?error=org_request").text
+    assert connections(5) == []
+
+
 def test_signed_out_callbacks_go_to_login(client):
     r = callback(client, installation_id=777, code="abc")
     assert r.headers["location"].startswith("/login")
@@ -764,3 +783,134 @@ def test_a_stream_whose_client_left_ends_and_lets_go(monkeypatch):
         return [chunk async for chunk in bus.subscribe("project:gone", gone)]
     assert asyncio.run(drain()) == [": connected\n\n"]
     assert not bus._subscribers.get("project:gone")
+
+
+# ---------- ?error= is a code, never a sentence ----------
+#
+# Anyone can send a link to these pages with any text in it. Once app.<domain> is this
+# box, "?error=Reinstall the App at https://evil.example" must not read as ours.
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+PHISH = "Reinstall the Cicatrixa App at https://evil.example/install"
+
+
+def a_project(uid, slug="shop"):
+    pid = db.q("INSERT INTO projects(user_id,name,slug,created_at) VALUES(?,?,?,?)",
+               (uid, slug, slug, db.now())).lastrowid
+    db.q("INSERT INTO services(project_id,name,slug,repo_full,created_at) VALUES(?,?,?,?,?)",
+         (pid, slug, slug, f"ada/{slug}", db.now()))
+    return pid
+
+
+@pytest.fixture
+def pages(client, monkeypatch):
+    """Every page that shows ?error=, for one signed-in admin with a project."""
+    uid = make_user(admin=1)
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',5,?)", (uid, db.now()))
+    monkeypatch.setattr(gh, "list_repos", lambda connection: [])
+    pid = a_project(uid)
+    signed_in(client, uid)
+    return ["/dashboard", "/connect/github", "/projects/new", "/admin", f"/projects/{pid}"]
+
+
+def test_no_page_shows_the_text_of_its_url(client, pages):
+    for path in pages:
+        page = client.get(path, params={"error": PHISH}, follow_redirects=False)
+        assert page.status_code == 200, path
+        assert "evil.example" not in page.text and "Reinstall" not in page.text, path
+        assert main.GENERIC_ERROR in page.text, path
+        assert main.ERRORS["taken"] in client.get(path, params={"error": "taken"}).text
+
+
+def test_the_code_page_shows_no_url_text_either(client):
+    uid = make_user(verified=0)
+    client.cookies.set(auth.PENDING_COOKIE_NAME, auth.make_pending(uid))
+    page = client.get("/verify-code", params={"error": PHISH})
+    assert "evil.example" not in page.text and main.GENERIC_ERROR in page.text
+
+
+def test_the_online_workspaces_codes_say_the_same_here():
+    """A link made online (workspace/routes.js redirects, site/workspace.js words)
+    reads the same once app.<domain> is this box."""
+    import json
+    import re
+    routes = open(os.path.join(REPO, "workspace", "routes.js"), encoding="utf-8").read()
+    listed = re.search(r"ERROR_CODES = Object\.freeze\(\[(.*?)\]\)", routes, re.S).group(1)
+    codes = tuple(re.findall(r'"([a-z_]+)"', listed))
+    assert codes == main.ONLINE_ERROR_CODES
+    page = open(os.path.join(REPO, "site", "workspace.js"), encoding="utf-8").read()
+    block = re.search(r"const ERRORS = \{(.*?)\n  \};", page, re.S).group(1)
+    literal = r'"(?:[^"\\]|\\.)*"'
+    online = {k: "".join(json.loads(s) for s in re.findall(literal, v))
+              for k, v in re.findall(rf"(\w+):\s*((?:{literal}\s*\+?\s*)+),", block)}
+    for code in codes:
+        assert main.ERRORS[code] == online[code], code
+
+
+def test_connect_refusals_redirect_with_codes(client, monkeypatch):
+    uid = make_user()
+    other = make_user("eve@example.com")
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',9,?)", (other, db.now()))
+    signed_in(client, uid)
+    monkeypatch.setattr(gh, "installations_user_controls", lambda code: {9: {}})
+    cases = [({"state": "forged"}, "state"), ({}, "no_code"),
+             ({"installation_id": 8, "code": "c"}, "not_yours"),
+             ({"installation_id": 9, "code": "c"}, "taken"), ({"code": "c"}, "not_installed")]
+    for params, code in cases:
+        r = callback(client, uid if "state" not in params else None, **params)
+        assert r.headers["location"] == f"/connect/github?error={code}", params
+    monkeypatch.setattr(gh, "installations_user_controls", lambda code: None)
+    assert callback(client, uid, code="c").headers["location"] == "/connect/github?error=github"
+
+
+def test_a_limit_is_told_from_the_account_not_the_url(client, monkeypatch):
+    uid = make_user()
+    db.q("UPDATE users SET quota_services=1 WHERE id=?", (uid,))
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',5,?)", (uid, db.now()))
+    monkeypatch.setattr(gh, "list_repos", lambda connection: [])
+    a_project(uid)
+    signed_in(client, uid)
+    r = client.post("/projects", data={"repos": ["ada/two"]}, follow_redirects=False)
+    assert r.headers["location"] == "/projects/new?error=service_limit"
+    assert "Service limit reached: 1/1 used" in client.get(r.headers["location"]).text
+    db.q("UPDATE users SET quota_services=5 WHERE id=?", (uid,))       # raised since
+    assert main.ERRORS["service_limit"] in client.get(r.headers["location"]).text
+
+
+def test_a_trial_that_ended_redirects_with_its_code(client, monkeypatch):
+    uid = make_user()
+    db.q("UPDATE users SET created_at=? WHERE id=?", (db.now() - 30 * 86400, uid))
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',5,?)", (uid, db.now()))
+    monkeypatch.setattr(gh, "list_repos", lambda connection: [])
+    pid = a_project(uid)
+    signed_in(client, uid)
+    r = client.post("/projects", data={"repos": ["ada/two"]}, follow_redirects=False)
+    assert r.headers["location"] == "/projects/new?error=trial_over"
+    assert "Your 14-day trial has ended" in client.get(r.headers["location"]).text
+    r = client.post(f"/projects/{pid}/deploy", follow_redirects=False)
+    assert r.headers["location"] == f"/projects/{pid}?error=trial_over"
+
+
+def test_admin_and_billing_refusals_redirect_with_codes(client, monkeypatch):
+    uid = make_user(admin=1)
+    signed_in(client, uid)
+    r = client.post("/admin/invites/send", data={"email": "nope"}, follow_redirects=False)
+    assert r.headers["location"] == "/admin?error=bad_email"
+    r = client.post("/admin/invites/send", data={"email": "ada@example.com"},
+                    follow_redirects=False)
+    assert r.headers["location"] == "/admin?error=has_account"
+    r = client.post("/admin/users/999/reset-link", follow_redirects=False)
+    assert r.headers["location"] == "/admin?error=no_user"
+    monkeypatch.setattr(billing, "available", lambda: False)
+    r = client.post("/billing/checkout", follow_redirects=False)
+    assert r.headers["location"] == "/dashboard?error=payments_off"
+
+
+def test_a_redirect_never_carries_an_unlisted_code():
+    with pytest.raises(ValueError):
+        main.with_error("/dashboard", "Reinstall at https://evil.example")

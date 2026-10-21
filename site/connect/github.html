@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect GitHub — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/workspace.js" defer></script>
+</head>
+<body data-page="connect">
+<header class="masthead"><div class="wrap nav ws">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <nav class="links" id="links" aria-label="Workspace" hidden>
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    <a class="lnk" href="/admin" id="admin-link" hidden>Admin</a>
+    <a class="lnk" href="/demo">Demo</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <button id="signout" class="btn ghost sm" type="button" hidden>Log out</button>
+</div></header>
+<main><div class="wrap">
+<div id="fatal" class="err" hidden></div>
+<div id="page" class="mid" hidden>
+  <div class="lbl-caps">repository access</div>
+  <h1>Connect <em>GitHub</em></h1>
+  <p class="sub">Cicatrixa needs access to the repositories you want to deploy.</p>
+  <div id="error" class="err" hidden></div>
+  <div id="connected" class="ok" hidden>✔ GitHub connected — <span id="conn-who"></span>.
+    <a href="/projects/new">Pick repos for a project →</a></div>
+
+  <div id="app-card" class="card" hidden>
+    <h2 class="title-row">⚡ Install the Cicatrixa app <span class="pill live">recommended</span></h2>
+    <p class="muted">One click. GitHub's own repo picker lets you grant access to exactly the
+      repositories you choose. Cicatrixa reads them to plan each deploy, and the same
+      installation carries over when deploying opens — nothing to reconnect.</p>
+    <p class="muted small" id="perms">GitHub will ask for read &amp; write access to code and pull
+      requests, and read access to organisation members (how Cicatrixa checks you administer an
+      organisation). Online, Cicatrixa only reads your code; write is for pushing verified fixes
+      once deploying opens.</p>
+    <a class="btn" href="/connect/github/start" target="_blank" id="install-btn">Install &amp; choose repos →</a>
+    <p class="muted small" id="authorize-line">Already installed the app on GitHub?
+      <a href="/connect/github/authorize">Connect it →</a></p>
+    <div id="install-hint" class="hint" hidden>
+      GitHub opened in a new tab. Select your repos there, click <strong>Install</strong>, then
+      <strong>Authorize</strong> — that is how GitHub confirms the installation is yours — and
+      <strong>come back to this tab</strong>; you'll be taken to the project page automatically.
+      <br><a href="/projects/new">Already done? Go to projects →</a>
+    </div>
+    <div id="change-hint" class="hint" hidden>
+      GitHub opened in a new tab. Change which repositories Cicatrixa can access there, click
+      <strong>Save</strong>, and <strong>come back to this tab</strong>; you'll be taken to the
+      project page automatically.
+    </div>
+  </div>
+
+  <div id="noapp-card" class="card" hidden>
+    <h2>⚡ GitHub App</h2>
+    <p class="muted" id="noapp-admin" hidden>Not enabled yet — you're an admin: set it up in one
+      click from the <a href="/admin">admin page</a> and this card becomes a one-click install
+      for everyone.</p>
+    <p class="muted" id="noapp-pending" hidden>Not enabled yet — your address is on the admin
+      list: confirm it's you on the <a href="/admin">admin page</a>, then set it up there in one
+      click and this card becomes a one-click install for everyone.</p>
+    <p class="muted" id="noapp-user" hidden>GitHub connections open shortly. Check back soon —
+      your account is ready for them.</p>
+  </div>
+
+  <p class="muted small mt">Cicatrixa reads the repositories you pick through GitHub's API to
+    work out how to run them. Nothing is built or run until deploying opens.</p>
+</div>
+</div></main>
+</body>
+</html>

@@ -378,7 +378,7 @@
     <p class="measure">The managed cloud needs nothing installed — two browser authorizations and incidents start arriving as proven PRs. Prefer to hold it in your hands first? The full healing loop ships as a self-hosted stack you can run on a laptop.</p>
     <div class="steps">
       <div class="step"><span class="k">STEP 1</span><h3>Point your alerts at us</h3><p>Paste one webhook into Sentry, Datadog, or CloudWatch — the tools you already run. Five minutes, reversible any time.</p></div>
-      <div class="step"><span class="k">STEP 2</span><h3>Connect GitHub — two clicks</h3><p>The same authorize button you've clicked for CI. Repo read, pull-request write, nothing else ever touches your infrastructure.</p></div>
+      <div class="step"><span class="k">STEP 2</span><h3>Connect GitHub — two clicks</h3><p>The same authorize button you've clicked for CI. It asks for read &amp; write access to code — used only to push verified fixes — plus pull requests and read access to org members.</p></div>
       <div class="step"><span class="k">STEP 3</span><h3>Wake up to proof</h3><p>Each incident becomes a PR: failing test + minimal fix + green suite + canary plan.</p></div>
     </div>
     <div class="tabs" role="tablist">
@@ -387,7 +387,7 @@
     </div>
     <div class="term termpane" id="pane-cloud"><span class="c"># nothing to download — connect in the browser</span>
 <span class="g">1.</span> point your Sentry / Datadog / CloudWatch webhook at cicatrixa
-<span class="g">2.</span> authorize the GitHub App — repo read, PR write
+<span class="g">2.</span> authorize the GitHub App — code read &amp; write (only to push verified fixes), pull requests, org members read
 <span class="g">3.</span> next incident arrives as a PR with its own failing test
 <span class="c"># or just launch it →</span> <a href="https://app.cicatrixa.com">app.cicatrixa.com</a></div>
     <div class="term termpane hidden" id="pane-self"><span class="c"># full healing loop on your own machine — Docker required</span>

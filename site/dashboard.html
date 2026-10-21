@@ -6,27 +6,85 @@
 <title>Dashboard — Cicatrixa</title>
 <link rel="icon" href="/favicon.svg">
 <link rel="stylesheet" href="/app.css">
-<script src="/accounts.js" defer></script>
+<script src="/workspace.js" defer></script>
 </head>
 <body data-page="dashboard">
-<header class="masthead"><div class="wrap nav">
+<header class="masthead"><div class="wrap nav ws">
   <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
     <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <nav class="links" id="links" aria-label="Workspace" hidden>
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    <a class="lnk" href="/admin" id="admin-link" hidden>Admin</a>
+    <a class="lnk" href="/demo">Demo</a>
+  </nav>
   <span class="spacer"></span>
-  <button id="signout" class="btn ghost sm" type="button">Log out</button>
+  <span class="who" id="who"></span>
+  <button id="signout" class="btn ghost sm" type="button" hidden>Log out</button>
 </div></header>
 <main><div class="wrap">
-<div id="account" hidden>
+<div id="fatal" class="err" hidden></div>
+<div id="page" hidden>
   <div id="notice" class="ok" hidden></div>
-  <div class="lbl-caps">your account</div>
-  <h1>You're <em>in</em></h1>
-  <p class="sub">Signed in as <b id="email" style="color:var(--ink)"></b>.</p>
-  <div class="card">
-    <p style="margin-top:0">Your account is ready. Deploying projects opens soon — we'll email
-      <b id="notify-email"></b> the moment your workspace is live.</p>
-    <p class="muted small" style="margin-bottom:0">Questions? <a href="mailto:hello@cicatrixa.com">hello@cicatrixa.com</a></p>
+  <div id="error" class="err" hidden></div>
+
+  <div class="row page-head">
+    <div class="grow">
+      <div class="lbl-caps">your projects</div>
+      <h1>Dashboard</h1>
+      <p class="sub" id="gh-status"></p>
+    </div>
+    <button id="disconnect" class="btn ghost sm" type="button" hidden>disconnect github</button>
+    <a id="connect" class="btn sm" href="/connect/github" hidden>connect github</a>
+    <a class="btn" href="/projects/new">+ new project</a>
+  </div>
+
+  <div class="card notice">
+    <p><b>Deploying opens soon.</b> <span id="notice-how">Cicatrixa already reads your repo,
+      works out how to run it and writes the Dockerfile.</span> When our build servers open,
+      planned projects deploy automatically and we email you.</p>
+    <p class="small"><a href="/demo">▶ Watch a real self-heal</a>
+      <span class="muted">— the recorded run of the healing agents fixing a live service.</span></p>
+  </div>
+
+  <div class="card meters">
+    <div class="meter" id="meter-services">
+      <div class="lbl"><span>services</span><span class="v"></span></div>
+      <div class="track"><div class="fill"></div></div>
+    </div>
+    <div class="meter" id="meter-analyses">
+      <div class="lbl"><span>analyses (24 h)</span><span class="v"></span></div>
+      <div class="track"><div class="fill"></div></div>
+    </div>
+  </div>
+
+  <div class="grid mt" id="projects"></div>
+  <div id="empty" class="card empty" hidden>
+    <div class="serif">Nothing planned yet.</div>
+    <p class="muted">No projects yet. <span id="empty-why"></span></p>
+    <a class="btn" id="empty-go" href="/connect/github">Connect GitHub</a>
   </div>
 </div>
 </div></main>
+
+<div id="dc-overlay" class="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dc-title">
+    <div class="title" id="dc-title">Disconnect GitHub?</div>
+    <p class="muted small">Cicatrixa will stop reading your repos.
+      Your projects and their plans stay; analyzing again needs GitHub connected.</p>
+    <div class="box">
+      <div class="head">GitHub App installation</div>
+      <label class="choice"><input type="radio" name="dc_revoke" value="0" checked>
+        <span>Keep the App installed on GitHub — reconnect later without re-approving repos</span></label>
+      <label class="choice"><input type="radio" name="dc_revoke" value="1">
+        <span>Also uninstall from GitHub — full removal</span></label>
+    </div>
+    <div id="dc-error" class="err" hidden></div>
+    <div class="actions">
+      <button class="btn ghost" type="button" data-close>Cancel</button>
+      <button class="btn danger" type="button" id="dc-go">Disconnect</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

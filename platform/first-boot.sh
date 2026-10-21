@@ -16,6 +16,11 @@
 # process on the box that asks, customer containers included. Add keys over SSH
 # once it is up (the log's last lines say how).
 #
+# A box that takes over the online workspace (docs/RUNBOOK.md, "Leaving Vercel") adds
+# TURSO_DATABASE_URL=libsql://... to that last line: it is not a secret (nothing reads
+# the database without its token, which goes in over SSH), and it keeps sign-ups closed
+# from the first start until the import.
+#
 # Watch it:      ssh ubuntu@<ip> sudo tail -f /var/log/cicatrixa-first-boot.log
 # Run it again:  sudo bash /root/first-boot.sh   (BASE_DOMAIN is read from .env)
 set -uo pipefail
@@ -145,7 +150,8 @@ first_boot() {
   log "first boot: installing the platform for app.$BASE_DOMAIN"
   enable_root_ssh
   local v
-  for v in OPENAI_API_KEY RESEND_API_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
+  for v in OPENAI_API_KEY RESEND_API_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
+           TURSO_AUTH_TOKEN BETTER_AUTH_SECRET; do
     if [ -n "${!v:-}" ]; then
       log "!! $v is set. If it came from cloud-init user data, any container on this box"
       log "   can read it from the metadata service — rotate it and add the new one over SSH."

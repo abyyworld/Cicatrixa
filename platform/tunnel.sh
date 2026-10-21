@@ -20,7 +20,10 @@
 # ADMIN_EMAILS is required: the address you will sign up with yourself. Without
 # it, whoever signs up first on the live site would be the admin.
 # Also accepted on any run, written into .env and kept: OPENAI_API_KEY,
-# RESEND_API_KEY, MAIL_FROM, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, AI_MODEL.
+# RESEND_API_KEY, MAIL_FROM, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, AI_MODEL, and
+# the online workspace's TURSO_DATABASE_URL, TURSO_AUTH_TOKEN and BETTER_AUTH_SECRET
+# (docs/RUNBOOK.md, "Leaving Vercel": passed on the first run, they keep sign-ups
+# closed from the first start until the import).
 #
 # The machine IS the server: while it sleeps or is off, the site shows a
 # Cloudflare error. Customer containers run on it, so prefer one that holds
@@ -120,7 +123,8 @@ upsert HTTPS_REDIRECT_MW cx-tunnel
 upsert ADMIN_EMAILS "$ADMIN_EMAILS"
 [ -z "$PASSED_ADMIN_EMAILS" ] || echo "  set ADMIN_EMAILS from what you passed"
 for v in OPENAI_API_KEY AI_MODEL RESEND_API_KEY MAIL_FROM \
-         STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET; do
+         STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
+         TURSO_DATABASE_URL TURSO_AUTH_TOKEN BETTER_AUTH_SECRET; do
   if [ -n "${!v:-}" ]; then
     upsert "$v" "${!v}"
     echo "  set $v from what you passed"

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/workspace.js" defer></script>
+</head>
+<body data-page="project">
+<header class="masthead"><div class="wrap nav ws">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <nav class="links" id="links" aria-label="Workspace" hidden>
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    <a class="lnk" href="/admin" id="admin-link" hidden>Admin</a>
+    <a class="lnk" href="/demo">Demo</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <button id="signout" class="btn ghost sm" type="button" hidden>Log out</button>
+</div></header>
+<main><div class="wrap">
+<div id="fatal" class="err" hidden></div>
+<div id="page" hidden>
+  <div id="error" class="err" hidden></div>
+  <div class="row page-head">
+    <div class="grow">
+      <div class="lbl-caps">project</div>
+      <h1 class="title-row"><span id="pname"></span> <span class="pill" id="statuspill"></span></h1>
+      <div class="mono muted small" id="pcount"></div>
+    </div>
+    <button class="btn" id="run-all" type="button">re-analyze all</button>
+    <button class="btn danger" id="delete" type="button">delete</button>
+  </div>
+
+  <div class="card notice" id="state-note">
+    <p><b id="state-head"></b></p>
+    <p class="muted small" id="state-text"></p>
+  </div>
+
+  <h2>Services</h2>
+  <div class="grid" id="services"></div>
+</div>
+</div></main>
+
+<template id="svc-tpl">
+  <div class="card svc">
+    <div class="row">
+      <div class="grow">
+        <div class="sname"><span data-f="name"></span><span class="tag" data-f="main" hidden>main</span></div>
+        <div class="mono muted xs anywhere" data-f="repo"></div>
+      </div>
+      <span class="pill" data-f="pill"></span>
+      <button class="btn ghost sm" type="button" data-f="run">re-analyze</button>
+    </div>
+    <p class="where mono"><span class="muted">will be live at</span> <span class="ink" data-f="addr"></span></p>
+    <div class="err" data-f="error" hidden></div>
+    <dl class="plan" data-f="plan" hidden>
+      <dt>plan</dt><dd data-f="notes"></dd>
+      <dt>port</dt><dd data-f="port"></dd>
+      <dt>health</dt><dd data-f="health"></dd>
+      <dt data-f="bridge-k" hidden>api bridge</dt><dd data-f="bridge" hidden></dd>
+    </dl>
+    <div data-f="df-wrap" hidden>
+      <div class="lbl-caps sec">Dockerfile</div>
+      <pre class="term short" data-f="dockerfile"></pre>
+      <p class="muted small" data-f="own-df" hidden>Uses the repo's own Dockerfile.</p>
+    </div>
+    <div class="lbl-caps sec">analysis log</div>
+    <pre class="term short" data-f="log" data-empty="waiting to be analyzed…"></pre>
+  </div>
+</template>
+
+<div id="del-overlay" class="overlay" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <div class="title" id="del-title">Delete project?</div>
+    <p class="muted small">Removes the project, its plans and its reserved addresses. Your
+      GitHub repos and the App installation are untouched.</p>
+    <div id="del-error" class="err" hidden></div>
+    <div class="actions">
+      <button class="btn ghost" type="button" data-close>Cancel</button>
+      <button class="btn danger" type="button" id="del-go">Delete project</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
