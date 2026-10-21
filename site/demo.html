@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-heal demo — Cicatrixa</title>
+<meta name="description" content="A screen recording of one real Cicatrixa self-heal run: a seeded crash detected, proven with a failing test, patched until the suite is green and shipped through a canary.">
+<meta property="og:title" content="Cicatrixa — a real self-heal run, unedited">
+<meta property="og:description" content="Crash detected, proven with a failing test, patched, shipped through a 20% canary. One recorded run on our demo order service.">
+<meta property="og:url" content="https://app.cicatrixa.com/demo">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://app.cicatrixa.com/media/self-heal-poster.jpg">
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<!-- Public page, no script: everything here is copied from the recording (demo/), so it
+     needs no session and nothing that could fail to load. -->
+<style>
+  .lede{color:var(--muted);font-size:14.5px;max-width:68ch;margin:0 0 28px}
+  .lede strong{color:var(--ink);font-weight:400}
+  /* The masthead is sticky on wide screens (app.css): keep #test / #patch clear of it. */
+  h2.sec{margin:52px 0 6px;scroll-margin-top:84px}
+  p.note{color:var(--muted);font-size:13px;max-width:78ch;margin:0 0 16px}
+
+  /* The recording. 1600x1000; width/height attributes reserve the box before metadata. */
+  .film{margin:0}
+  .film video{display:block;width:100%;height:auto;aspect-ratio:16/10;background:#000;
+    border:1px solid var(--line);border-radius:12px}
+  .film figcaption{color:var(--muted);font-size:12.5px;margin-top:12px;max-width:72ch}
+  .chips{list-style:none;margin:16px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+  .chips li{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:99px;
+    padding:3px 12px;white-space:nowrap}
+  .chips b{color:var(--ink);font-weight:500}
+  .chips a{text-decoration:none;color:var(--healed)}
+
+  /* Timeline: one row per event the dashboard showed, in the healer's stage colours
+     (healer/main.py .evt.s-*). */
+  .tl{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:12px;
+    overflow:hidden;background:var(--panel)}
+  .tl li{display:grid;grid-template-columns:96px 122px minmax(0,1fr);gap:2px 14px;
+    align-items:baseline;padding:11px 18px 11px 15px;border-left:3px solid var(--c,var(--line))}
+  .tl li + li{border-top:1px solid var(--line)}
+  .tl time{font-size:12px;color:var(--muted);white-space:nowrap}
+  .tl .tag{font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--c,var(--muted))}
+  .tl .msg{margin:0;font-size:13.5px;line-height:1.6;overflow-wrap:anywhere}
+  .tl .more{display:block;font-size:12px;color:var(--muted);margin-top:3px}
+  .tl .more a{color:var(--healed);text-decoration:none}
+  .tl .s-watchdog{--c:var(--scar)}
+  .tl .s-diagnostician{--c:#5b8bd6}
+  .tl .s-reproducer{--c:var(--amber)}
+  .tl .s-fixer{--c:#b57edc}
+  .tl .s-gate{--c:var(--ink)}
+  .tl .s-deployer{--c:#4fd1c5}
+  .tl .s-healed{--c:var(--healed);background:rgba(64,217,103,.05)}
+
+  /* Code exactly as shown: no wrapping (Python indentation must survive a phone), so a
+     long line scrolls inside its box instead of the page. */
+  .file{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel2)}
+  .file .fname{font-size:12px;color:var(--muted);padding:9px 18px;border-bottom:1px solid var(--line);
+    background:var(--panel);overflow-wrap:anywhere}
+  .code{margin:0;padding:14px 0;font:12.5px/1.75 var(--mono);color:#9fb3a7;overflow-x:auto;
+    white-space:pre;tab-size:4}
+  pre.code{padding:14px 18px}
+  .code code{font:inherit;background:none;border:0;border-radius:0;padding:0;overflow-wrap:normal}
+  .code .lines{width:max-content;min-width:100%}
+  .code .dl{padding:0 18px;white-space:pre;min-height:1.75em}
+  .code .add{color:var(--healed);background:rgba(64,217,103,.07)}
+  .code .del{color:var(--scar);background:rgba(255,82,87,.08)}
+  .code .hunk{color:#5b8bd6}
+
+  .honest{margin-top:52px}
+  .honest p{margin:0 0 12px;font-size:14px;color:var(--muted);max-width:72ch}
+  .honest p strong{color:var(--ink);font-weight:400}
+  .honest .row{margin-top:20px}
+  .honest .btn{white-space:normal;line-height:1.5}
+
+  footer.foot{border-top:1px solid var(--line);padding:24px 0 40px;font-size:12.5px;color:var(--muted)}
+  footer.foot a{color:var(--muted);text-decoration:none}
+  footer.foot a:hover{color:var(--healed)}
+
+  @media (max-width:640px){
+    h2.sec{margin-top:40px}
+    .tl li{grid-template-columns:auto minmax(0,1fr);padding:11px 14px 12px 12px}
+    .tl .msg{grid-column:1 / -1}
+    .tl .tag{justify-self:end}
+    .file .fname{padding:9px 13px}
+    pre.code{padding:12px 13px}
+    .code{font-size:12px}
+    .code .dl{padding:0 13px}
+    .honest{margin-top:40px}
+  }
+</style>
+</head>
+<body data-page="demo">
+<header class="masthead"><div class="wrap nav">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <span class="spacer"></span>
+  <a class="lnk" href="/login">Log in</a>
+  <a class="btn sm" href="/signup">Sign up</a>
+</div></header>
+<main><div class="wrap">
+
+<div class="lbl-caps">recorded run · 18 July 2026</div>
+<h1>Crash to shipped fix, <em>unedited</em></h1>
+<p class="lede">Cicatrixa's self-heal engine watching our demo order service. A bug we planted
+  crashes it; the engine pins the cause, <strong>proves it with a test that fails</strong>,
+  patches until that test passes and the suite stays green, then ships the fix through a
+  canary. This is the screen recording of that run.</p>
+
+<figure class="film">
+  <video controls playsinline preload="metadata" muted width="1600" height="1000"
+         poster="/media/self-heal-poster.jpg"
+         aria-label="Screen recording of the Cicatrixa healer dashboard during the run">
+    <source src="/media/self-heal.mp4" type="video/mp4">
+    Your browser cannot play this video. <a href="/media/self-heal.mp4">Download it instead.</a>
+  </video>
+  <figcaption>A real run against a live order service with a seeded division-by-zero.
+    Nothing is sped up or re-cut.</figcaption>
+</figure>
+<ul class="chips" aria-label="About this run">
+  <li>watching <b>app-stable</b></li>
+  <li>model <b>gpt-5.1-codex-mini</b></li>
+  <li>gate <b>off</b></li>
+  <li>fixed on attempt <b>1</b></li>
+  <li><a href="/media/self-heal.mp4" download>download · MP4 · 4.5 MB</a></li>
+</ul>
+
+<h2 class="sec">The run, event by event</h2>
+<p class="note">Every event the dashboard showed, word for word, at the time it showed it
+  (local time, UTC+5). Crash detected at 12:11:10 PM, fix at 100% of traffic at 12:12:27 PM;
+  the dashboard's own timer read 1m 16s, and 45 s of that was the canary's watch window.</p>
+<ol class="tl">
+  <li class="s-watchdog"><time datetime="2026-07-18T12:11:06+05:00">12:11:06 PM</time>
+    <span class="tag">watchdog</span>
+    <p class="msg">Watching app-stable (http://app-stable:8000/health)</p></li>
+  <li class="s-watchdog"><time datetime="2026-07-18T12:11:10+05:00">12:11:10 PM</time>
+    <span class="tag">watchdog</span>
+    <p class="msg">Crash detected in app-stable
+      <span class="more">traceback — collapsed in the recording, so not shown here</span></p></li>
+  <li class="s-diagnostician"><time datetime="2026-07-18T12:11:10+05:00">12:11:10 PM</time>
+    <span class="tag">diagnostician</span>
+    <p class="msg">Analyzing traceback against indexed source…</p></li>
+  <li class="s-diagnostician"><time datetime="2026-07-18T12:11:18+05:00">12:11:18 PM</time>
+    <span class="tag">diagnostician</span>
+    <p class="msg">Root cause (58% confidence): create_order computes “multiplier = 100 // (100 - req.discount_pct)” without validating discount_pct; when discount_pct is 100 this subtracts to zero and triggers ZeroDivisionError. The bug lies in main.py’s arithmetic, not in logs.
+      <span class="more">suspect code — main.py: collapsed in the recording, so not shown here</span></p></li>
+  <li class="s-reproducer"><time datetime="2026-07-18T12:11:18+05:00">12:11:18 PM</time>
+    <span class="tag">reproducer</span>
+    <p class="msg">Writing a failing test in an ephemeral container…</p></li>
+  <li class="s-reproducer"><time datetime="2026-07-18T12:11:25+05:00">12:11:25 PM</time>
+    <span class="tag">reproducer</span>
+    <p class="msg">Bug reproduced: tests/test_create_order_full_discount.py fails on current code
+      <span class="more"><a href="#test">the test it wrote ↓</a></span></p></li>
+  <li class="s-fixer"><time datetime="2026-07-18T12:11:25+05:00">12:11:25 PM</time>
+    <span class="tag">fixer</span>
+    <p class="msg">Patching until the failing test passes and the suite stays green…</p></li>
+  <li class="s-fixer"><time datetime="2026-07-18T12:11:37+05:00">12:11:37 PM</time>
+    <span class="tag">fixer</span>
+    <p class="msg">Verified fix on attempt 1: repro test passes, full suite green
+      <span class="more"><a href="#patch">the verified patch ↓</a></span></p></li>
+  <li class="s-gate"><time datetime="2026-07-18T12:11:37+05:00">12:11:37 PM</time>
+    <span class="tag">gate</span>
+    <p class="msg">Human gate off — fully autonomous mode</p></li>
+  <li class="s-deployer"><time datetime="2026-07-18T12:11:37+05:00">12:11:37 PM</time>
+    <span class="tag">deployer</span>
+    <p class="msg">Building patched image orderservice:healed-1784358697</p></li>
+  <li class="s-deployer"><time datetime="2026-07-18T12:11:41+05:00">12:11:41 PM</time>
+    <span class="tag">deployer</span>
+    <p class="msg">Starting canary container app-canary</p></li>
+  <li class="s-deployer"><time datetime="2026-07-18T12:11:42+05:00">12:11:42 PM</time>
+    <span class="tag">deployer</span>
+    <p class="msg">Canary live at 20% traffic — watching error rate for 45s</p></li>
+  <li class="s-deployer"><time datetime="2026-07-18T12:12:27+05:00">12:12:27 PM</time>
+    <span class="tag">deployer</span>
+    <p class="msg">Canary promoted to 100% traffic (0 errors in watch window). Old version kept at weight 0 as instant-rollback path.</p></li>
+  <li class="s-healed"><time datetime="2026-07-18T12:12:27+05:00">12:12:27 PM</time>
+    <span class="tag">healed</span>
+    <p class="msg">Bug detected, diagnosed, reproduced, patched, and shipped to 100% of traffic — zero human intervention</p></li>
+</ol>
+
+<h2 class="sec" id="test">The proof: the test it wrote</h2>
+<p class="note">Written by the reproducer and run against the code as it was. It failed — the
+  bug was proven — at 12:11:25 PM, before the fixer changed a line.</p>
+<div class="file">
+  <div class="fname">tests/test_create_order_full_discount.py</div>
+<pre class="code" tabindex="0"><code>import main
+from main import OrderRequest
+
+
+def reset_order_state() -&gt; None:
+    """Reset the mutable globals so tests remain deterministic."""
+    main.orders.clear()
+    main.order_counter = 0
+
+
+def test_create_order_all_discount_yields_zero_total() -&gt; None:
+    reset_order_state()
+    request = OrderRequest(item="demo", quantity=1, price_cents=1000, discount_pct=100)
+
+    response = main.create_order(request)
+
+    # After a 100% discount the total charge should be zero cents.
+    assert response.total_cents == 0, "Full discounts should return zero total, not crash."
+    assert response.discount_applied == 100
+    assert main.orders[response.order_id]["total_cents"] == 0</code></pre>
+</div>
+
+<h2 class="sec" id="patch">The patch it shipped</h2>
+<p class="note">Verified on attempt 1 at 12:11:37 PM: the test above passes and the full suite
+  stays green. Then it went out through the canary.</p>
+<div class="file">
+  <div class="fname">main.py</div>
+  <div class="code" role="region" aria-label="Unified diff of main.py" tabindex="0"><div class="lines"><div class="dl del">--- a/main.py</div><div class="dl add">+++ b/main.py</div><div class="dl hunk">@@ -52,10 +52,10 @@</div><div class="dl"> def create_order(req: OrderRequest):</div><div class="dl">     global order_counter</div><div class="dl"> </div><div class="dl del">-    # BUG: ZeroDivisionError when discount_pct == 100</div><div class="dl del">-    # Should be: total = req.price_cents * req.quantity * (100 - req.discount_pct) // 100</div><div class="dl del">-    multiplier = 100 // (100 - req.discount_pct)  # &lt;-- crashes at discount_pct=100</div><div class="dl del">-    total_cents = req.price_cents * req.quantity // multiplier</div><div class="dl add">+    if not 0 &lt;= req.discount_pct &lt;= 100:</div><div class="dl add">+        raise HTTPException(status_code=400, detail="discount_pct must be between 0 and 100")</div><div class="dl add">+</div><div class="dl add">+    total_cents = req.price_cents * req.quantity * (100 - req.discount_pct) // 100</div><div class="dl"> </div><div class="dl">     order_counter += 1</div><div class="dl">     order_id = order_counter</div></div></div>
+</div>
+
+<section class="card honest" aria-labelledby="honest-h">
+  <h2 id="honest-h">What this is, and what it isn't</h2>
+  <p>This is Cicatrixa's self-heal engine on <strong>our demo service</strong> — a small order
+    API with a division-by-zero we planted on purpose. It is one recorded run, not your code
+    and not a benchmark. The traceback and the suspect-code panel were collapsed while
+    recording, so they are not shown; every event and every line of code above is copied
+    from the screen.</p>
+  <p>Hosting your own repos opens when our build servers do. Until then nothing of yours is
+    built or run — but Cicatrixa already reads your repo, works out how to run it and writes
+    the Dockerfile.</p>
+  <div class="row">
+    <a class="btn" href="/signup">Sign up and connect GitHub to have your repo analysed today →</a>
+    <a class="small" href="/login">Already have an account? Log in</a>
+  </div>
+</section>
+
+</div></main>
+<footer class="foot"><div class="wrap">
+  <a href="https://cicatrixa.com">cicatrixa.com</a>
+</div></footer>
+</body>
+</html>

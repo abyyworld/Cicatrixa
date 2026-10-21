@@ -313,6 +313,94 @@ ssh root@<ip> 'docker exec cx-control python -c "import sqlite3;s=sqlite3.connec
   || { echo "backup FAILED" >&2; rm -f "$f.tmp"; }
 ```
 
+## Leaving Vercel
+
+Until there is a box, `app.cicatrixa.com` is the online workspace on Vercel (`accounts/`,
+`workspace/`, Turso database `cicatrixa-prod`): people sign up, connect GitHub through the same
+GitHub App the platform uses, and plan projects that wait for a server. One command on the box
+brings all of it over — every account (passwords work unchanged, nobody resets anything), the
+GitHub App, every GitHub connection and every planned project — and the projects then deploy on
+their own. Do it in this order. `app` stays on Vercel until step 6, so nobody can sign up on the
+box before their online account has arrived there.
+
+**1. Bring the box up** — any way above (`bootstrap.sh`, the cloud-init stub, or `tunnel.sh`),
+but leave the `app` record on Vercel for now: point only `*` at the box (tunnel mode: add only the
+`*` route and its record). The script then ends `PENDING` (exit 2). That is expected here; step 6
+finishes it.
+
+**2. Give the box the online database** — the same three values the Vercel project has
+(**Settings → Environment Variables**), added to `platform/.env` on the box
+(`/root/cicatrixa-platform/.env`):
+
+```bash
+TURSO_DATABASE_URL=libsql://cicatrixa-prod-akbarjuraev.<region>.turso.io
+TURSO_AUTH_TOKEN=eyJ...
+BETTER_AUTH_SECRET=...
+```
+
+`BETTER_AUTH_SECRET` must be the very value Vercel has: the GitHub App's private key and secrets
+are stored encrypted with it, and the import stops if it cannot read them. If Vercel hides the
+Turso token, make a new one (`turso db tokens create cicatrixa-prod`). Put a value that contains
+`$` in single quotes.
+
+**3. Start the stack with them** — this also runs the migration the import needs:
+
+```bash
+cd /root/cicatrixa-platform && docker compose up -d
+```
+
+**4. Import** — first see what it would do (`--dry-run` writes nothing), then do it. `--notify`
+emails everyone whose projects come over that their projects are deploying (needs
+`RESEND_API_KEY`):
+
+```bash
+docker exec cx-control python -m app.import_online --dry-run
+docker exec cx-control python -m app.import_online --notify
+```
+
+| it prints | meaning |
+|---|---|
+| `GitHub App: id … copied` | the App's keys are on the box; nobody connects GitHub again |
+| `= someone@…` under users | that address already had an account on the box. It keeps its own password, and gets the online projects and connection |
+| `new admins: …` | addresses in the box's `ADMIN_EMAILS` that confirmed their email online. Nobody else: `docker exec cx-control python -m app.promote you@example.com` |
+| `✗ … installation N is connected to another account here` | that connection was not imported; its owner connects again from the Connect page after step 6 |
+| `✗ shop (shop): shop.cicatrixa.com is taken here; not imported` | a project on the box already has that address. The owner makes the project again, under another name |
+| `import refused, nothing was written: … different GitHub App` | the box made its own App. One App per instance: installations made on one mean nothing to the other |
+| `import refused, nothing was written: … schema version` | cx-control has not started with this code yet: step 3 |
+
+Running it again is safe: it only adds what is new.
+
+**5. Restart cx-control** — as it starts, it deploys every imported service that has never been
+deployed, for owners still allowed to (the 14-day trial of an imported account starts at the
+import):
+
+```bash
+docker restart cx-control && docker logs -f cx-control
+```
+
+**6. Move `app` to the box** — anyone who signed up online since step 4 comes along if you run
+steps 4 and 5 once more first. Then Cloudflare → DNS: **edit** `app` to type **A**, content
+`<box-ip>`, **DNS only** (tunnel mode: delete the `app` CNAME and add the `app` route — "Free:
+Cloudflare Tunnel", step 3). The GitHub App's callback and webhook URLs are `app.cicatrixa.com`
+ones, so GitHub follows on its own.
+
+**7. Vercel** → the project → **Settings → Domains** → remove `app.cicatrixa.com`. Leave
+`cicatrixa.com` and `www`: their `/signup`, `/login` and `/dashboard` already redirect to `app.`,
+which is now the box.
+
+**8. Verify** — on the box, then from your laptop:
+
+```bash
+cd /root/cicatrixa-platform && ./verify-public.sh     # exit 0: live, trusted certificate
+curl -sS https://app.cicatrixa.com/healthz            # from outside: {"ok":true}
+```
+
+People sign in at `https://app.cicatrixa.com/login` with the email and password they already
+have; online sessions do not carry over, so everyone signs in once. Links the online accounts
+emailed earlier (confirm, reset) stop working once `app` has moved — "Forgot your password?" sends
+a new one. Once it is all live, empty the three values in `.env` and `docker compose up -d`:
+nothing reads them again.
+
 ## Fix 2 — bring the platform back up (`app.cicatrixa.com`)
 
 `platform/recover.sh` automates all of this. From your laptop:

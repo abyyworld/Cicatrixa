@@ -32,9 +32,39 @@ def test_the_shipped_migrations_roll_all_the_way_down_and_back_up(fresh_db):
     assert db.migrate_down(db.LEGACY_BASELINE) == db.LEGACY_BASELINE
     for table in ("transform", "break_observation"):
         assert db.one("SELECT name FROM sqlite_master WHERE name=?", (table,)) is None
+    assert "external_id" not in _cols("users") and "external_id" not in _cols("projects")
     assert db.migrate() == head
     for table in ("transform", "break_observation"):
         assert db.one("SELECT name FROM sqlite_master WHERE name=?", (table,)) is not None
+    assert "external_id" in _cols("users") and "external_id" in _cols("projects")
+
+
+def test_online_import_ids_are_unique_but_optional(fresh_db):
+    """Migration 3: what app.import_online brought over carries the workspace's id,
+    so a second run finds it. Accounts made here have none, and many may have none."""
+    for email in ("a@example.com", "b@example.com"):
+        db.q("INSERT INTO users(email,pw_hash,created_at) VALUES(?,?,?)", (email, "h", db.now()))
+    db.q("UPDATE users SET external_id='u-1' WHERE email='a@example.com'")
+    with pytest.raises(Exception, match="UNIQUE"):
+        db.q("UPDATE users SET external_id='u-1' WHERE email='b@example.com'")
+    db.conn().rollback()
+    uid = db.one("SELECT id FROM users LIMIT 1")["id"]
+    for slug in ("one", "two"):
+        db.q("INSERT INTO projects(user_id,name,slug,created_at) VALUES(?,?,?,?)",
+             (uid, slug, slug, db.now()))
+    db.q("UPDATE projects SET external_id='p-1' WHERE slug='one'")
+    with pytest.raises(Exception, match="UNIQUE"):
+        db.q("UPDATE projects SET external_id='p-1' WHERE slug='two'")
+
+
+def test_migration_3_rolls_back_to_2_alone(fresh_db):
+    db.q("INSERT INTO users(email,pw_hash,created_at,external_id) VALUES(?,?,?,?)",
+         ("a@example.com", "h", db.now(), "u-1"))
+    assert db.migrate_down(2) == 2
+    assert "external_id" not in _cols("users")
+    assert db.one("SELECT email FROM users")["email"] == "a@example.com"   # rows survive
+    assert db.one("SELECT name FROM sqlite_master WHERE name='transform'") is not None
+    assert db.migrate() == _head()
 
 
 def test_legacy_columns_still_arrive_on_a_fresh_database(fresh_db):

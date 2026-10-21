@@ -22,13 +22,19 @@ Owner: kenny09077@gmail.com. Cloudflare account: Annolieberto@gmail.com.
 | serves | `cicatrixa.com`, `www.` | `app.cicatrixa.com`, `*.cicatrixa.com` user apps, `demo.` |
 | deploy | git push → Vercel | free, any machine: `platform/tunnel.sh` (Cloudflare Tunnel); new box: paste `platform/first-boot.sh`'s stub into cloud-init; by hand: `platform/bootstrap.sh`; existing box: `SERVER=root@<ip> ./platform/deploy.sh` |
 
-**Accounts (added 2026-10-18), on Vercel beside the site:** sign-up, email confirmation, login and
-password reset for `app.cicatrixa.com`, with no server of ours. `api/auth.js` (one Vercel function,
-Better Auth) + `accounts/` (config, Resend emails, schema) + `site/{signup,login,forgot-password,
-reset-password,dashboard}.html`. Users live in the Turso database `cicatrixa-prod` (org
+**The online workspace (accounts 2026-10-18, projects 2026-10-21), on Vercel beside the site:**
+until the platform has a Docker host, `app.cicatrixa.com` is two Vercel functions — `api/auth.js`
+(Better Auth: sign-up, email confirmation, login, reset; `accounts/`) and `api/workspace.js`
+(`workspace/`: connect GitHub through the platform's own GitHub App flow at the platform's own URLs,
+pick repos, a real analysis through the GitHub API — a byte-for-byte port of `ai.py`/`engine.py`'s
+planning — and projects that wait as **planned**) — plus static pages in `site/`. Nothing is built
+or run there, and no page may say otherwise. Users, projects and the GitHub App's keys (secret ones
+encrypted with `BETTER_AUTH_SECRET`) live in the Turso database `cicatrixa-prod` (org
 `akbarjuraev`; see the free-database-servers repo). Setup and env vars: `accounts/README.md`.
-Until the platform runs on a Docker host, the dashboard says deploying opens soon; when it does,
-the platform takes `app.` over and imports these users (README, last section).
+When a box exists, `python -m app.import_online` brings every account, the App, every connection
+and every planned project over and cx-control deploys them: `docs/RUNBOOK.md`, "Leaving Vercel".
+Never press `/admin`'s "create GitHub App" on the box after that: a second App strands every
+installation.
 
 There is a **third**, older thing: the repo root (`docker-compose.yml`, `app/`, `healer/`,
 `traefik/`) is the original **self-heal demo** — a seeded-bug FastAPI order service plus the
@@ -114,7 +120,8 @@ On the box, in `/root/cicatrixa-platform` (the repo's `platform/` directory):
 | `flywheel.py` | `break_observation` (per incident, tenant-scoped) + `transform` (promoted, tenant-agnostic, **zero customer code** — enforced on write). Library lookup fires *before* generation; unattended-merge-rate and hit-rate queries live here |
 | `fingerprint.py` | libcst structural hash of a call site — identifiers stripped, literals bucketed. Matches the same break across repos without storing anyone's source. Python only |
 | `db.py` | SQLite schema + versioned migrations (`schema_version` in `settings`, explicit up/down, raises on failure). `conn()` is thread-local |
-| `auth.py` `gh.py` `billing.py` `invites.py` `referrals.py` `mailer.py` `metrics.py` `dbprovision.py` `bus.py` | scrypt+signed cookies / GitHub App+PAT / Stripe / invite gate / referral quota / Resend / cgroup usage / on-demand Postgres / SSE pub-sub |
+| `auth.py` `gh.py` `billing.py` `invites.py` `referrals.py` `mailer.py` `metrics.py` `dbprovision.py` `bus.py` | scrypt+signed cookies (also accepts Better Auth hashes) / GitHub App+PAT / Stripe / invite gate / referral quota / Resend / cgroup usage / on-demand Postgres / SSE pub-sub |
+| `import_online.py` | one-time move from the online workspace (Turso): users, GitHub App settings, connections, planned projects. Writes rows only; `main.startup` deploys imported services that never deployed. `RESERVED_SLUGS` is copied from `main.py` (and into `workspace/plan.js`) — a test keeps them equal |
 
 Conventions: blocking work goes through `asyncio.to_thread`; background threads reach the loop
 via `asyncio.run_coroutine_threadsafe`. Keep it that way — a blocking call in an `async def`

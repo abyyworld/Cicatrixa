@@ -1,5 +1,6 @@
-// Account pages: talks to Better Auth at /api/auth (api/auth.js). Every page names
-// itself in <body data-page="…">; dynamic text goes in with textContent only.
+// Account pages (sign up, log in, forgot and reset password): talks to Better Auth at
+// /api/auth (api/auth.js). Every page names itself in <body data-page="…">; dynamic text
+// goes in with textContent only. The signed-in pages are workspace.js's.
 (() => {
   const $ = (id) => document.getElementById(id);
   const params = new URLSearchParams(location.search);
@@ -53,10 +54,16 @@
     });
   }
 
-  // A path on this site only: anything else could send people to another host.
+  // A path on this site only, query included (/project?id=…, /connect/github): anything
+  // else could send people to another host. Resolved the way the browser will resolve
+  // it, so //host, /\host and tabs or newlines it strips cannot slip past.
   function safeNext(value) {
-    return value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")
-      ? value : "/dashboard";
+    if (!value || !value.startsWith("/")) return "/dashboard";
+    try {
+      const url = new URL(value, location.origin);
+      if (url.origin === location.origin) return url.pathname + url.search + url.hash;
+    } catch { /* not a URL */ }
+    return "/dashboard";
   }
 
   const linkError = () => {
@@ -124,22 +131,6 @@
           return show("error", problem(r));
         }
         location.assign("/login?reset=1");
-      });
-    },
-
-    async dashboard() {
-      const r = await api("/get-session");
-      if (!r.ok || !r.data?.user) {
-        const e = params.get("error");
-        return location.replace(e ? `/login?error=${encodeURIComponent(e)}` : "/login");
-      }
-      $("email").textContent = r.data.user.email;
-      $("notify-email").textContent = r.data.user.email;
-      if (params.get("welcome")) show("notice", "Email confirmed — welcome to Cicatrixa.");
-      $("account").hidden = false;
-      $("signout").addEventListener("click", async () => {
-        await api("/sign-out", {});
-        location.assign("/login");
       });
     },
   };

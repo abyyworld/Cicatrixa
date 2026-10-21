@@ -7,12 +7,56 @@
       "has": [{ "type": "host", "value": "app.cicatrixa.com" }],
       "destination": "/dashboard",
       "permanent": false
+    },
+    {
+      "source": "/:page(dashboard|login|signup|forgot-password|reset-password|project|admin)",
+      "has": [{ "type": "host", "value": "cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/:page",
+      "permanent": false
+    },
+    {
+      "source": "/:page(dashboard|login|signup|forgot-password|reset-password|project|admin)",
+      "has": [{ "type": "host", "value": "www.cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/:page",
+      "permanent": false
+    },
+    {
+      "source": "/projects/:path*",
+      "has": [{ "type": "host", "value": "cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/projects/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/projects/:path*",
+      "has": [{ "type": "host", "value": "www.cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/projects/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/connect/:path*",
+      "has": [{ "type": "host", "value": "cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/connect/:path*",
+      "permanent": false
+    },
+    {
+      "source": "/connect/:path*",
+      "has": [{ "type": "host", "value": "www.cicatrixa.com" }],
+      "destination": "https://app.cicatrixa.com/connect/:path*",
+      "permanent": false
     }
   ],
   "rewrites": [
-    { "source": "/api/auth/:path*", "destination": "/api/auth?__auth_path=:path*" }
+    { "source": "/api/auth/:path*", "destination": "/api/auth?__auth_path=:path*" },
+    { "source": "/api/workspace/:path*", "destination": "/api/workspace?__path=:path*" },
+    { "source": "/connect/github/start", "destination": "/api/workspace?__path=connect/github/start" },
+    { "source": "/connect/github/authorize", "destination": "/api/workspace?__path=connect/github/authorize" },
+    { "source": "/connect/github/callback", "destination": "/api/workspace?__path=connect/github/callback" },
+    { "source": "/connect/github/setup", "destination": "/api/workspace?__path=connect/github/setup" },
+    { "source": "/admin/github/callback", "destination": "/api/workspace?__path=admin/github/callback" },
+    { "source": "/api/webhooks/github", "destination": "/api/workspace?__path=webhooks/github" }
   ],
   "functions": {
-    "api/auth.js": { "maxDuration": 15 }
+    "api/auth.js": { "maxDuration": 15 },
+    "api/workspace.js": { "maxDuration": 60 }
   }
 }

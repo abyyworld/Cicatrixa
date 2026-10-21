@@ -235,6 +235,26 @@ MIGRATIONS: list[Migration] = [
             "ALTER TABLE services DROP COLUMN pr_mode",
         ],
     ),
+    Migration(
+        3, "online_import",
+        up=[
+            # The online workspace's ids (Better Auth's user.id, cx_project.id) for
+            # rows app.import_online brought over, so running it again finds them
+            # instead of copying them twice. A plain column plus a unique index:
+            # SQLite cannot ADD a UNIQUE column. NULLs never collide.
+            "ALTER TABLE users ADD COLUMN external_id TEXT",
+            "CREATE UNIQUE INDEX idx_users_external_id ON users(external_id)",
+            "ALTER TABLE projects ADD COLUMN external_id TEXT",
+            "CREATE UNIQUE INDEX idx_projects_external_id ON projects(external_id)",
+        ],
+        down=[
+            # SQLite refuses to drop an indexed column: each index goes first.
+            "DROP INDEX IF EXISTS idx_projects_external_id",
+            "ALTER TABLE projects DROP COLUMN external_id",
+            "DROP INDEX IF EXISTS idx_users_external_id",
+            "ALTER TABLE users DROP COLUMN external_id",
+        ],
+    ),
 ]
 
 

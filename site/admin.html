@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin — Cicatrixa</title>
+<link rel="icon" href="/favicon.svg">
+<link rel="stylesheet" href="/app.css">
+<script src="/workspace.js" defer></script>
+</head>
+<body data-page="admin">
+<header class="masthead"><div class="wrap nav ws">
+  <a class="wordmark" href="https://cicatrixa.com"><img src="/favicon.svg" width="22" height="22" alt="">
+    <span><span class="r">cica</span><span class="g">trixa</span></span></a>
+  <nav class="links" id="links" aria-label="Workspace" hidden>
+    <a class="lnk" href="/dashboard">Dashboard</a>
+    <a class="lnk" href="/projects/new">New project</a>
+    <a class="lnk" href="/admin" id="admin-link" hidden>Admin</a>
+    <a class="lnk" href="/demo">Demo</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <button id="signout" class="btn ghost sm" type="button" hidden>Log out</button>
+</div></header>
+<main><div class="wrap">
+<div id="fatal" class="err" hidden></div>
+<div id="denied" class="mid" hidden>
+  <div class="lbl-caps">instance-wide view</div>
+  <h1>Admins <em>only</em></h1>
+  <p class="sub">This page is for the people who run Cicatrixa.</p>
+  <a class="btn" href="/dashboard">Back to your dashboard →</a>
+</div>
+<div id="page" class="wide" hidden>
+  <div class="lbl-caps">instance-wide view</div>
+  <h1>Instance <em>admin</em></h1>
+  <p class="sub">Base URL: <code id="base-url"></code> · wildcard: <code>*.cicatrixa.com</code>
+    · AI: <code id="ai-state"></code> · email: <code id="mail-state"></code></p>
+  <div id="notice" class="ok" hidden></div>
+  <div id="error" class="err" hidden></div>
+
+  <div class="card gap-below">
+    <div class="lbl-caps cap">accounts and projects</div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div class="card gap-below">
+    <h2 class="title-row">GitHub App <span class="pill" id="app-pill"></span></h2>
+    <div id="app-on" hidden>
+      <p class="muted">Users can now connect via one-click install. Webhooks are delivered to
+        <code id="hook-url"></code>.</p>
+      <p class="muted small">If the base domain changes, update the app's webhook &amp; callback
+        URLs at <span class="mono ink" id="app-settings"></span>. The move to a server carries
+        this App over, so every installation keeps working.</p>
+    </div>
+    <div id="app-off" hidden>
+      <p class="muted">One click creates a GitHub App with the right permissions
+        (<code>contents:write</code> for pushing fixes, <code>metadata</code>,
+        <code>pull_requests</code>, <code>push</code> events) and stores its credentials
+        here, the secret ones encrypted. Create it under the <strong>company
+        organization</strong>, not a personal account — it's the app every customer will
+        install, and it moves with Cicatrixa to the server.</p>
+      <form id="app-form" novalidate>
+        <label for="app-name">app name</label>
+        <input type="text" id="app-name" name="name" value="Cicatrixa" maxlength="34" autocomplete="off">
+        <label for="app-org">github organization <span class="aside">(blank = personal account)</span></label>
+        <input type="text" id="app-org" name="org" placeholder="org-name" maxlength="39" autocomplete="off">
+        <div class="submit-row"><button class="btn" type="submit">Create GitHub App →</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Moving to a server</h2>
+    <p class="muted small">Nothing is built or run here — there is no Docker host yet. When one
+      is up, one command on the box imports every user (their passwords keep working), this
+      GitHub App, every connection and every planned project, and the platform deploys them.
+      Then <code>app.cicatrixa.com</code> moves to the box.</p>
+    <pre class="term">docker exec cx-control python -m app.import_online --dry-run
+docker exec cx-control python -m app.import_online</pre>
+    <p class="muted small">The exact order — box, <code>platform/.env</code>, import, DNS,
+      Vercel — is in <code>docs/RUNBOOK.md</code>, section “Leaving Vercel”.</p>
+  </div>
+</div>
+</div></main>
+</body>
+</html>

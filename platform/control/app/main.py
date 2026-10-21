@@ -128,6 +128,18 @@ async def startup():
              "log=log || char(10) || '✗ interrupted by platform restart — retrying' "
              "WHERE id=?", (db.now(), o["id"]))
         asyncio.create_task(engine.deploy(o["service_id"], trigger="retry"))
+    # Projects brought over from the online workspace (python -m app.import_online)
+    # were planned there and never built: start them, as create_project would have,
+    # for owners still allowed to deploy. Nothing else starts a first deploy — the
+    # watchdog only looks after services that were live once. A service with any
+    # deployment has been tried here, and is its owner's to retry.
+    for s in db.all_("SELECT s.id, p.user_id FROM services s "
+                     "JOIN projects p ON p.id=s.project_id "
+                     "WHERE p.external_id IS NOT NULL AND s.status='new' AND NOT EXISTS "
+                     "(SELECT 1 FROM deployments d WHERE d.service_id=s.id) ORDER BY s.id"):
+        owner = db.one("SELECT * FROM users WHERE id=?", (s["user_id"],))
+        if owner and referrals.can_deploy(owner)[0]:
+            asyncio.create_task(engine.deploy(s["id"], "import"))
     asyncio.create_task(watchdog.run_forever())
 
 
