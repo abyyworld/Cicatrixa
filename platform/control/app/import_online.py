@@ -2,7 +2,9 @@
 
     docker exec cx-control python -m app.import_online --dry-run
     docker exec cx-control python -m app.import_online
-      ... app.<domain> moves here, verify-public.sh, `docker restart cx-control` ...
+      ... app.<domain> moves here, the import once more, verify-public.sh ...
+    docker exec cx-control python -m app.import_online --start
+    docker restart cx-control
     docker exec cx-control python -m app.import_online --notify
 
 Until the platform had a Docker host, app.cicatrixa.com ran on Vercel (accounts/,
@@ -10,8 +12,13 @@ workspace/): people signed up, connected GitHub through the same GitHub App, and
 planned projects nothing could build yet. This copies all of it out of that Turso
 database: every user (Better Auth's password hashes work here unchanged — see
 auth.verify_password), the GitHub App's credentials, every GitHub connection and every
-planned project. The next start of cx-control deploys those projects (main.startup).
-docs/RUNBOOK.md, "Leaving Vercel", has the order to do it in.
+planned project. docs/RUNBOOK.md, "Leaving Vercel", has the order to do it in.
+
+Nothing imported deploys until `--start` says so: it records that app.<domain> is here
+and verified, and from then on each start of cx-control deploys the imported projects
+that wait (main.startup). Before it, a restart — `docker compose up -d` after a fix to
+.env, at any earlier step — deploys nothing, so no customer app runs before the move
+and verify-public.sh may still restart Traefik.
 
 The import emails nobody. `--notify` is its own step, for once the box serves
 app.<domain> and the imported projects have started deploying: it tells each owner
@@ -21,13 +28,16 @@ what is still owed.
 An account already on the box is never merged with an online one by default: an
 address proves nothing until someone has shown they own it, and whoever signed up
 here first would get the online person's projects and GitHub installation. Such
-people are listed and left out; --link-existing merges them after the operator has
-looked, and even then only when both sides confirmed the address.
+people are listed and left out; `--link-existing a@x,b@y` merges the addresses it
+names, after the operator has looked at each, and even then only when both sides
+confirmed the address. It names them one by one: an account squatted here sits in
+the same list as the operator's own.
 
 Safe to run again: what it brought over carries the workspace's own id (external_id).
 A second run adds what is new, carries over what changed online since (a password reset,
 while the account here still uses its online password; an email confirmed since),
-removes projects deleted online that never deployed here, and never brings back one
+removes projects deleted online that never deployed here and GitHub connections it
+brought over that were disconnected online since, and never brings back a project
 deleted here. Everything is written in one transaction; --dry-run rolls it back after
 printing what it would have done.
 
@@ -55,12 +65,15 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from . import auth, db, engine, mailer, metrics, referrals
 
-NEEDS_SCHEMA = 3            # db.MIGRATIONS 3 adds the external_id columns
+NEEDS_SCHEMA = 4            # db.MIGRATIONS 3 and 4 add the external_id columns
 ENC_PREFIX = "enc1:"
 # settings key, written in the import's own transaction: from its commit on, an import
 # has happened here, and main.py opens sign-ups (they wait for it while
 # TURSO_DATABASE_URL is set).
 IMPORTED_KEY = "online_import_at"
+# settings key `--start` writes (RUNBOOK "Leaving Vercel" step 7, once app.<domain> is
+# here and verified): only from then on does main.startup deploy imported services.
+START_KEY = "online_import_start_at"
 # The online cx_setting row accounts/auth.js writes when a password is set through an
 # emailed reset link: pw_proof:<userId>. The one proof that whoever holds the
 # password also holds the inbox — confirming an address only shows that someone with
@@ -214,7 +227,8 @@ def decrypt_setting(secret: str, stored: str) -> str:
 @dataclass
 class Report:
     dry_run: bool = False
-    link_existing: bool = False
+    link_existing: frozenset = frozenset()      # the addresses --link-existing names
+    started: bool = False                       # --start has run here
     admin_emails_set: bool = True
     mail_on: bool = True
     app: str = "none online: nothing copied"
@@ -222,6 +236,7 @@ class Report:
     users_before: int = 0
     users_linked: list[str] = field(default_factory=list)
     users_existing: list[str] = field(default_factory=list)   # not merged: see the docstring
+    link_unused: list[str] = field(default_factory=list)      # named, but nobody to link
     users_refreshed: list[str] = field(default_factory=list)  # password carried over again
     users_confirmed: list[str] = field(default_factory=list)  # confirmed online since
     no_password: list[str] = field(default_factory=list)
@@ -231,6 +246,7 @@ class Report:
     connections_new: int = 0
     connections_before: int = 0
     connections_skipped: list[str] = field(default_factory=list)
+    connections_removed: list[str] = field(default_factory=list)
     projects_new: int = 0
     services_new: int = 0
     projects_before: int = 0
@@ -261,9 +277,11 @@ class Report:
             out.append(f"  {len(self.users_existing)} not brought over: an account with the "
                        "same address was made here, and nothing shows it is the same person")
             out += [f"    ✗ {s}" for s in self.users_existing]
-            if not self.link_existing:
-                out.append("    each is left out with their GitHub connection and projects. "
-                           "If an account above is theirs, run again with --link-existing")
+            out.append("    each is left out with their GitHub connection and projects. If "
+                       "an account above is theirs, run again with --link-existing and its "
+                       "address (a@x,b@y for more): only the addresses named are merged")
+        out += [f"    ! --link-existing names {e}, but no online account with that address "
+                "has one here: nothing linked" for e in self.link_unused]
         out += [f"    ↻ {e}: password changed online since; carried over" for e in
                 self.users_refreshed]
         out += [f"    ↻ {e}: email confirmed online since" for e in self.users_confirmed]
@@ -282,6 +300,7 @@ class Report:
         out.append(f"  GitHub connections: {self.connections_new} new, "
                    f"{self.connections_before} imported before")
         out += [f"    ✗ {s}" for s in self.connections_skipped]
+        out += [f"    − {s}" for s in self.connections_removed]
         out.append(f"  projects: {self.projects_new} new ({self.services_new} services), "
                    f"{self.projects_before} imported before")
         out += [f"    ✗ {s}" for s in self.projects_skipped]
@@ -291,13 +310,17 @@ class Report:
                 for s in self.projects_removed]
         out += [f"    ! {s}" for s in self.projects_gone_kept]
         if self.held_back:
-            out.append("  held back (they wait, and the first restart of cx-control after "
-                       "that changes deploys them):")
+            out.append("  held back (they wait; once --start has run, the first restart of "
+                       "cx-control after that changes deploys them):")
             out += [f"    ✗ {s}" for s in self.held_back]
         out += [f"  {line}" for line in self.capacity]
-        if not self.dry_run:
-            out.append("  next: docs/RUNBOOK.md, Leaving Vercel — move app and * here, verify, "
-                       "then `docker restart cx-control` deploys what waits; --notify after")
+        if self.started and not self.dry_run:
+            out.append("  --start has run here: the next `docker restart cx-control` deploys "
+                       "what waits; --notify after")
+        elif not self.dry_run:
+            out.append("  nothing deploys yet. next: docs/RUNBOOK.md, Leaving Vercel — move app "
+                       "and * here, run this again, verify, then --start and `docker restart "
+                       "cx-control` deploy what waits; --notify after")
         return "\n".join(out)
 
 
@@ -398,18 +421,18 @@ def _account_here(c, row) -> str:
             + (f"GitHub connected ({github['gh_login'] or '?'})" if github else "no GitHub"))
 
 
-def _link_refusal(c, row, online_verified: bool, link_existing: bool) -> str | None:
+def _link_refusal(c, row, online_verified: bool, named: bool) -> str | None:
     """Why the online account must not be merged into the account `row` here, if so.
 
     Merging hands that account the online person's projects and GitHub installation,
     and an address is all the two share. The box takes sign-ups by any host name once
     `*` points at it, and with email off it confirms them without proof — so by
-    default nothing is merged, and even when asked to, not without both sides having
-    confirmed the address."""
+    default nothing is merged, an address is merged only when --link-existing names it
+    (`named`), and even then not without both sides having confirmed it."""
     if row["external_id"]:
         return "the account here is already linked to another online account"
     facts = _account_here(c, row)
-    if not link_existing:
+    if not named:
         return f"already has an account here ({facts})"
     if not row["email_verified"]:
         return f"the account here never confirmed its email ({facts}); not linked"
@@ -436,12 +459,14 @@ def _refresh_user(c, row, email: str, verified: bool, online_hash: str | None,
 
 
 def _import_users(c, data, report: Report, admin_emails: set[str], now: float,
-                  link_existing: bool):
-    """Returns {online user id: user id here} for everyone who arrived or was here."""
+                  link_existing: frozenset):
+    """Returns {online user id: user id here} for everyone who arrived or was here.
+    `link_existing`: the addresses whose accounts here may be merged (_link_refusal)."""
     passwords = {str(r["userId"]): r["password"] for r in data["credentials"]}
     proofs = {str(r["key"])[len(PROOF_PREFIX):] for r in data["settings"]
               if str(r["key"]).startswith(PROOF_PREFIX)}
     mapped: dict[str, int] = {}
+    met: set[str] = set()                       # addresses with an account here to link
     for u in data["users"]:
         ext = str(u["id"] or "")
         email = (u["email"] or "").strip().lower()
@@ -463,7 +488,8 @@ def _import_users(c, data, report: Report, admin_emails: set[str], now: float,
             continue
         row = c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
         if row:
-            why = _link_refusal(c, row, verified, link_existing)
+            met.add(email)
+            why = _link_refusal(c, row, verified, email in link_existing)
             if why:
                 listed = report.users_skipped if row["external_id"] else report.users_existing
                 listed.append(f"{email}: {why}")
@@ -490,7 +516,30 @@ def _import_users(c, data, report: Report, admin_emails: set[str], now: float,
             report.admins.append(email)
         elif verified and email in admin_emails:
             report.admins_unproven.append(email)
+    report.link_unused = sorted(link_existing - met)
     return mapped
+
+
+def _remove_gone_connections(c, data, report: Report, emails: dict[str, str]):
+    """GitHub connections this command brought over whose online row is gone since:
+    their owner pressed Disconnect online (or connected another installation, which
+    _import_connections then brings over). Kept here, it would clone and deploy their
+    projects through an installation they disconnected; removed, _hold_back lists them.
+
+    Only connections this command made (external_id), never one made here; and only
+    when the online database has the table at all — without it, every connection
+    would look disconnected."""
+    if "cx_github" not in {t["name"] for t in data.get("tables", [])}:
+        return
+    online = {(str(g["userId"]), int(g["installationId"])) for g in data["github"]}
+    for row in c.execute("SELECT * FROM github_connections WHERE external_id IS NOT NULL "
+                         "ORDER BY id").fetchall():
+        if (row["external_id"], row["installation_id"]) in online:
+            continue
+        c.execute("DELETE FROM github_connections WHERE id=?", (row["id"],))
+        who = emails.get(row["external_id"], row["external_id"])
+        report.connections_removed.append(f"{who}: installation {row['installation_id']} "
+                                          "was disconnected online since; removed here")
 
 
 def _import_connections(c, data, report: Report, mapped: dict[str, int],
@@ -518,8 +567,8 @@ def _import_connections(c, data, report: Report, mapped: dict[str, int],
                                               "kept that connection")
             continue
         c.execute("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,"
-                  "created_at) VALUES(?,?,?,?,?)",
-                  (uid, "app", iid, g["accountLogin"] or "", now))
+                  "created_at,external_id) VALUES(?,?,?,?,?,?)",
+                  (uid, "app", iid, g["accountLogin"] or "", now, ext))
         report.connections_new += 1
 
 
@@ -696,11 +745,12 @@ def _capacity(c, report: Report):
 
 
 def apply(c: sqlite3.Connection, data: dict, report: Report, *, secret: str,
-          admin_emails: set[str], now: float, link_existing: bool = False):
+          admin_emails: set[str], now: float, link_existing: frozenset = frozenset()):
     """Writes what `fetch` read, inside the caller's transaction."""
     _copy_settings(c, data, report, secret)
     mapped = _import_users(c, data, report, admin_emails, now, link_existing)
     emails = {str(u["id"]): (u["email"] or "").strip().lower() for u in data["users"]}
+    _remove_gone_connections(c, data, report, emails)   # first: a changed one comes back
     _import_connections(c, data, report, mapped, emails, now)
     _remove_gone_projects(c, data, report)          # first: it may free an address
     _import_projects(c, data, report, mapped, now)
@@ -721,8 +771,21 @@ def _require_schema():
                       "it starts), then run this again.")
 
 
-def run(*, dry_run: bool = False, link_existing: bool = False, env=None) -> Report:
+def addresses(value) -> frozenset:
+    """--link-existing's addresses, as "a@x,b@y" or any iterable of them, lowercased."""
+    if isinstance(value, bool):
+        raise TypeError("link_existing takes the addresses to merge, not a yes or no")
+    items = value.split(",") if isinstance(value, str) else value
+    found = frozenset(e.strip().lower() for e in items if e and e.strip())
+    bad = sorted(e for e in found if "@" not in e)
+    if bad:
+        raise Refused(f"--link-existing takes email addresses, a@x,b@y: not {', '.join(bad)}")
+    return found
+
+
+def run(*, dry_run: bool = False, link_existing=(), env=None) -> Report:
     env = os.environ if env is None else env
+    link_existing = addresses(link_existing)
     _require_schema()
     names = ("TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "BETTER_AUTH_SECRET")
     url, token, secret = ((env.get(n) or "").strip() for n in names)
@@ -734,11 +797,67 @@ def run(*, dry_run: bool = False, link_existing: bool = False, env=None) -> Repo
                     if e.strip()}
     data = fetch(turso_http_url(url), token)          # all reads before any write
     report = Report(dry_run=dry_run, link_existing=link_existing,
+                    started=bool(db.setting(START_KEY)),
                     admin_emails_set=bool(admin_emails), mail_on=mailer.available())
     with _write_transaction(db.conn(), commit=not dry_run):
         apply(db.conn(), data, report, secret=secret, admin_emails=admin_emails,
               now=db.now(), link_existing=link_existing)
     return report
+
+
+# ---------- letting them deploy (--start) ----------
+
+@dataclass
+class Start:
+    dry_run: bool = False
+    since: str = ""                 # when --start ran before, if it did
+    waiting: int = 0                # imported services that have not started here
+    held_back: list[str] = field(default_factory=list)
+    capacity: list[str] = field(default_factory=list)
+
+    def summary(self) -> str:
+        if self.dry_run:
+            out = ["DRY RUN, nothing was recorded. --start would let the imported projects "
+                   "deploy:"]
+        elif self.since:
+            out = [f"--start already ran here ({self.since}); imported projects deploy as "
+                   "cx-control starts."]
+        else:
+            out = ["Recorded: imported projects deploy from the next start of cx-control on."]
+        out.append(f"  {self.waiting} imported service(s) wait to deploy")
+        if self.held_back:
+            out.append("  held back whatever the limits (a restart after the change starts "
+                       "them):")
+            out += [f"    ✗ {s}" for s in self.held_back]
+        out += [f"  {line}" for line in self.capacity]
+        if not self.dry_run:
+            out.append("  next: `docker restart cx-control && docker logs -f cx-control`, then "
+                       "--notify")
+        return "\n".join(out)
+
+
+def start(*, dry_run: bool = False) -> Start:
+    """Records that the imported projects may deploy (START_KEY). Run once app.<domain>
+    is here and verify-public.sh passed: main.startup deploys none before it, however
+    often cx-control restarts on the way there."""
+    _require_schema()
+    if not db.setting(IMPORTED_KEY):
+        raise Refused("nothing has been imported here yet: run the import first "
+                      "(docs/RUNBOOK.md, Leaving Vercel, step 4)")
+    since = db.setting(START_KEY)
+    result = Start(dry_run=dry_run, since=_day(float(since)) if since else "")
+    c = db.conn()
+    report = Report()
+    _hold_back(c, report)
+    _capacity(c, report)
+    result.held_back, result.capacity = report.held_back, report.capacity
+    result.waiting = c.execute("SELECT COUNT(*) n FROM services s JOIN projects p ON "
+                               "p.id=s.project_id WHERE p.external_id IS NOT NULL AND "
+                               + WAITING).fetchone()["n"]
+    if not dry_run and not since:
+        db.q("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING",
+             (START_KEY, str(db.now())))
+    return result
 
 
 # ---------- telling people (--notify) ----------
@@ -860,15 +979,21 @@ def main(argv: list[str] | None = None) -> int:
                     "projects into this box (docs/RUNBOOK.md, \"Leaving Vercel\").")
     parser.add_argument("--dry-run", action="store_true",
                         help="print what would be done, and write or send nothing")
-    parser.add_argument("--link-existing", action="store_true",
-                        help="merge an online account into an account already here with the "
-                             "same address, when both confirmed it (check the dry run first)")
+    parser.add_argument("--link-existing", metavar="EMAILS", default="",
+                        help="merge the online accounts with these addresses (a@x,b@y) into "
+                             "the accounts already here with the same address, when both "
+                             "confirmed it; only those named (check the dry run first)")
+    parser.add_argument("--start", action="store_true",
+                        help="import nothing: record that app.<domain> is here and verified, "
+                             "so cx-control's next start deploys the imported projects")
     parser.add_argument("--notify", action="store_true",
                         help="import nothing: email the owners whose imported projects have "
                              "started deploying and were not told yet")
     args = parser.parse_args(argv)
-    if args.notify and args.link_existing:
-        parser.error("--notify only sends email; --link-existing belongs to the import")
+    if args.notify and args.start:
+        parser.error("--start and --notify are separate steps: --start, restart, then --notify")
+    if (args.notify or args.start) and args.link_existing:
+        parser.error("--link-existing belongs to the import, not to --start or --notify")
     # The live database as it is: no schema work from a side door, and no empty
     # database conjured up at a wrong path (as app.promote).
     if not os.path.exists(db.DB_PATH):
@@ -877,11 +1002,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.notify:
             print(notify(dry_run=args.dry_run).summary())
+        elif args.start:
+            print(start(dry_run=args.dry_run).summary())
         else:
             print(run(dry_run=args.dry_run, link_existing=args.link_existing).summary())
     except Refused as exc:
-        what = "notify refused, nobody was emailed" if args.notify \
-            else "import refused, nothing was written"
+        what = ("notify refused, nobody was emailed" if args.notify
+                else "start refused, nothing was recorded" if args.start
+                else "import refused, nothing was written")
         print(f"{what}: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -279,6 +279,9 @@ async function user(email) {
   assert.equal(r.status, 200);
   const mail = [...outbox].reverse().find((m) => m.to[0] === email);
   assert.equal((await c.authCall("GET", linkIn(mail).replace(BASE, ""))).status, 302);
+  // The link confirms the address but opens no session (accounts/auth.js): log in.
+  assert.equal((await c.authCall("POST", "/sign-in/email",
+                                 { email, password: "correct horse battery" })).status, 200);
   const s = await (await c.authCall("GET", "/get-session")).json();
   c.id = s.user.id;
   c.email = email;

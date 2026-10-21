@@ -121,7 +121,7 @@ On the box, in `/root/cicatrixa-platform` (the repo's `platform/` directory):
 | `fingerprint.py` | libcst structural hash of a call site — identifiers stripped, literals bucketed. Matches the same break across repos without storing anyone's source. Python only |
 | `db.py` | SQLite schema + versioned migrations (`schema_version` in `settings`, explicit up/down, raises on failure). `conn()` is thread-local |
 | `auth.py` `gh.py` `billing.py` `invites.py` `referrals.py` `mailer.py` `metrics.py` `dbprovision.py` `bus.py` | scrypt+signed cookies (also accepts Better Auth hashes) / GitHub App+PAT / Stripe / invite gate / referral quota / Resend / cgroup usage / on-demand Postgres / SSE pub-sub |
-| `import_online.py` | one-time move from the online workspace (Turso): users, GitHub App settings, connections, planned projects. Writes rows only; `main.startup` deploys imported services that never deployed. `RESERVED_SLUGS` is copied from `main.py` (and into `workspace/plan.js`) — a test keeps them equal |
+| `import_online.py` | one-time move from the online workspace (Turso): users, GitHub App settings, connections, planned projects. Writes rows only; once `--start` has run, `main.startup` deploys imported services that never deployed, within the box's quotas. `RESERVED_SLUGS` is copied from `main.py` (and into `workspace/plan.js`) — a test keeps them equal |
 
 Conventions: blocking work goes through `asyncio.to_thread`; background threads reach the loop
 via `asyncio.run_coroutine_threadsafe`. Keep it that way — a blocking call in an `async def`
@@ -224,12 +224,21 @@ freezes every request in the process.
   header (so `.git/config` has none), every path the AI or the medic names goes through
   `engine.inside_checkout` (refuses `.git`, also via symlinks), and the build context and the
   medic's test copy leave `.git` out — the static plan's `COPY .` would otherwise publish it.
+- A checkout is the customer's: never follow its symlinks out of it, never write through a name it
+  chose. Repo-chosen names are read only through `engine.read_checkout_file` (regular files inside
+  the checkout). The plan's Dockerfile lives at `WORK_ROOT/<slug>.cx.Dockerfile`, beside the
+  checkout, and goes into the build context as text.
 - Online admin = an `ADMIN_EMAILS` address, confirmed, AND a password set through an emailed reset
   link (`pw_proof:<userId>` in `cx_setting`). A confirmation click alone proves only the inbox, not
   who chose the password: whoever signed up first with the owner's address did. The import grants
   platform admin on the same proof.
 - The online workspace's redirects carry `?error=<code>` from `routes.ERROR_CODES` only; the pages
   map codes to sentences and never print query text.
-- `import_online` writes rows and emails nobody; `--notify` is its own later step. Until an import
-  has committed, a box with `TURSO_DATABASE_URL` set refuses sign-ups, and the import never merges
-  into an existing box account without `--link-existing` (both sides confirmed).
+- `import_online` writes rows and emails nobody. Deploying waits for `--start`, emailing for
+  `--notify` (RUNBOOK "Leaving Vercel" order). Until an import has committed, a box with
+  `TURSO_DATABASE_URL` set refuses sign-ups; the import merges into an existing box account only for
+  addresses named in `--link-existing a@x,b@y` (both sides confirmed); a re-run drops imported
+  GitHub connections that were disconnected online.
+- Online, a confirmation link confirms and signs nobody in (`autoSignInAfterVerification: false`):
+  it proves the inbox, not who chose the password. A sign-up for an unconfirmed address emails a
+  "set your password" link instead, and any emailed reset also confirms the address.

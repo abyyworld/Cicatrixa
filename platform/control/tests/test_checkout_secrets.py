@@ -246,3 +246,243 @@ def test_the_medics_test_copy_has_no_git(checkout, monkeypatch):
     root = str(checkout).lstrip("/")
     assert root + "/src/app.py" in seen["names"]
     assert not [n for n in seen["names"] if engine._in_git_dir(n[len(root):])]
+
+
+# ---------- a repo's links: never read or written through ----------
+#
+# A repo decides what each of its names is, links included, and the clone writes them
+# as committed: `.cx.Dockerfile -> /data/cicatrixa.db` or `README.md -> /proc/self/environ`
+# is one commit away. cx-control runs as root and holds every API key in its
+# environment, the platform's database and every other tenant's checkout.
+
+@pytest.fixture
+def outside(tmp_path):
+    """Files beside the checkouts that no repo may reach: the platform's database and
+    another tenant's checkout."""
+    data = tmp_path / "data"
+    (data / "work" / "other-tenant").mkdir(parents=True)
+    (data / "cicatrixa.db").write_text("PLATFORM DATABASE")
+    (data / "work" / "other-tenant" / "secret.env").write_text("DB_PASSWORD=hunter2\n")
+    return data
+
+
+def repo_with(tmp_path, files: dict, links: dict):
+    """A git repo committing `files` (name -> text) and `links` (name -> target)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    git("init", "-q", "-b", "main", cwd=src)
+    for name, text in files.items():
+        (src / name).parent.mkdir(parents=True, exist_ok=True)
+        (src / name).write_text(text)
+    for name, target in links.items():
+        os.symlink(str(target), src / name)
+    git("add", "-A", cwd=src)
+    git("commit", "-qm", "first", cwd=src)
+    return src
+
+
+def a_service(slug="site"):
+    from app import db
+    uid = db.q("INSERT INTO users(email,pw_hash,created_at) VALUES('a@b.c','x',?)",
+               (db.now(),)).lastrowid
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',1,?)", (uid, db.now()))
+    pid = db.q("INSERT INTO projects(user_id,name,slug,created_at) VALUES(?,?,?,?)",
+               (uid, slug, slug, db.now())).lastrowid
+    sid = db.q("INSERT INTO services(project_id,name,slug,repo_full,branch,created_at) "
+               "VALUES(?,?,?,?,?,?)", (pid, slug, slug, f"a/{slug}", "main",
+                                       db.now())).lastrowid
+    service = dict(db.one("SELECT * FROM services WHERE id=?", (sid,)))
+    service.update(user_id=uid, project_slug=slug)
+    return service, db.one("SELECT * FROM projects WHERE id=?", (pid,))
+
+
+class Built(Exception):
+    pass
+
+
+def capture_builds(monkeypatch) -> list[dict]:
+    """engine.dock() whose API records every build context it is sent, then stops."""
+    builds = []
+
+    class API:
+        def build(self, **kw):
+            kw["fileobj"].seek(0)
+            tar = tarfile.open(fileobj=kw["fileobj"])
+            members = {m.name: m for m in tar.getmembers()}
+            df = members.get(kw["dockerfile"])
+            builds.append({"dockerfile": kw["dockerfile"], "names": sorted(members),
+                           "is_file": bool(df and df.isfile()),
+                           "text": tar.extractfile(df).read().decode() if df and df.isfile()
+                           else None})
+            raise Built()
+
+    monkeypatch.setattr(engine, "dock", lambda: type("D", (), {"api": API()})())
+    return builds
+
+
+def test_a_committed_cx_dockerfile_link_is_never_written_through(
+        fresh_db, tmp_path, outside, monkeypatch):
+    """The review's PoC: a repo with no Dockerfile commits `.cx.Dockerfile` as a link to
+    a file outside its checkout. The plan's Dockerfile used to be written through it
+    (open(..., "w")), over that file. Now it never enters the checkout: the build gets
+    it as its own context entry, and the repo's link stays out of that context."""
+    from app import ai, gh, metrics
+    victim = outside / "cicatrixa.db"
+    src = repo_with(tmp_path, {"index.html": "<h1>hi</h1>\n"}, {".cx.Dockerfile": victim})
+    monkeypatch.setattr(engine, "WORK_ROOT", str(outside / "work"))
+    monkeypatch.setattr(gh, "clone_url", lambda conn, repo: str(src))
+    monkeypatch.setattr(metrics, "check_deploy_quota", lambda owner, s: None)
+    monkeypatch.setattr(ai, "OPENAI_API_KEY", "")                # the heuristic plan
+    builds = capture_builds(monkeypatch)
+    service, project = a_service()
+    with pytest.raises(Built):
+        engine._run_pipeline(service, project, 1, lambda line: None)
+    assert victim.read_text() == "PLATFORM DATABASE"
+    [build] = builds
+    assert build["dockerfile"] == engine.PLAN_DOCKERFILE == ".cx.Dockerfile"
+    assert build["is_file"] and build["text"].startswith("FROM nginx:alpine")
+    assert build["names"].count(".cx.Dockerfile") == 1 and "index.html" in build["names"]
+    # Kept beside the checkout, not in it; the repo's link is still just a link there.
+    kept = engine.plan_dockerfile_path("site")
+    assert os.path.dirname(kept) == engine.WORK_ROOT and not kept.startswith(
+        os.path.join(engine.WORK_ROOT, "site") + os.sep)
+    assert engine.read_plan_dockerfile("site") == build["text"]
+    assert os.path.islink(os.path.join(engine.WORK_ROOT, "site", ".cx.Dockerfile"))
+
+
+def test_the_plan_dockerfile_goes_with_its_checkout(fresh_db, tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "WORK_ROOT", str(tmp_path / "work"))
+    engine._save_plan_dockerfile("site", "FROM scratch\n")
+    assert engine.read_plan_dockerfile("site") == "FROM scratch\n"
+    assert os.listdir(engine.WORK_ROOT) == ["site.cx.Dockerfile"]      # no temp file left
+    service, _ = a_service()
+    monkeypatch.setattr(engine, "dock", lambda: (_ for _ in ()).throw(RuntimeError()))
+    monkeypatch.setattr(engine, "_existing_containers", lambda slug: [])
+    monkeypatch.setattr(engine.gh, "revoke_repo", lambda repo: None)
+    engine.delete_service(service)
+    assert engine.read_plan_dockerfile("site") is None
+
+
+def test_the_medic_builds_with_the_plan_dockerfile_and_copies_nothing_into_the_clone(
+        fresh_db, tmp_path, outside, monkeypatch):
+    """Its fix flow copied the cached plan with shutil.copy onto `.cx.Dockerfile` in a
+    fresh clone — through the repo's link, when it commits one — and then committed
+    the copy into the customer's repo with `git add -A`."""
+    import json
+    from app import db, gh
+    victim = outside / "cicatrixa.db"
+    src = repo_with(tmp_path, {"index.html": "<h1>hi</h1>\n"}, {".cx.Dockerfile": victim})
+    monkeypatch.setattr(engine, "WORK_ROOT", str(outside / "work"))
+    monkeypatch.setattr(medic, "PUSH_ROOT", str(tmp_path / "push"))
+    monkeypatch.setattr(gh, "clone_url", lambda conn, repo: str(src))
+    engine._save_plan_dockerfile("site", "FROM nginx:alpine\nCOPY . /usr/share/nginx/html\n")
+    service, project = a_service()
+    mid = db.q("INSERT INTO chat_messages(project_id,role,kind,data,created_at) "
+               "VALUES(?,'agent','fix',?,?)", (project["id"], json.dumps({
+                   "service_id": service["id"], "commit_message": "fix greeting",
+                   "patches": [{"file": "index.html", "find": "hi", "replace": "hello"}]}),
+                   db.now())).lastrowid
+    builds, committed = [], []
+
+    def fake_build(workdir, dockerfile, tag, log, buildargs=None, dockerfile_text=None):
+        with engine._build_context(workdir, dockerfile, dockerfile_text) as context:
+            context.seek(0)
+            tar = tarfile.open(fileobj=context)
+            member = tar.getmember(dockerfile)
+            builds.append((dockerfile, member.isfile() and tar.extractfile(member).read()))
+        return ""
+
+    def fake_deliver(clone, *a):
+        committed.extend(subprocess.run(["git", "-C", clone, "show", "--name-only",
+                                         "--format=", "HEAD"], capture_output=True,
+                                        text=True).stdout.split())
+        return "pushed", None
+
+    monkeypatch.setattr(engine, "_build", fake_build)
+    monkeypatch.setattr(engine, "dock", lambda: type("D", (), {"images": type(
+        "I", (), {"remove": staticmethod(lambda *a, **k: None)})()})())
+    monkeypatch.setattr(medic, "_record_fix", lambda *a: None)
+    monkeypatch.setattr(medic, "_verify_fix", lambda *a: ("unverified", None))
+    monkeypatch.setattr(medic, "_deliver", fake_deliver)
+    sid, text = medic.apply_fix_sync(project["id"], mid)
+    assert sid == service["id"], text
+    assert victim.read_text() == "PLATFORM DATABASE"
+    assert builds == [(".cx.Dockerfile", b"FROM nginx:alpine\nCOPY . /usr/share/nginx/html\n")]
+    assert committed == ["index.html"]
+
+
+def test_the_ai_snapshot_reads_no_key_file_through_a_link_out_of_the_checkout(
+        tmp_path, outside, monkeypatch):
+    """The review's PoC: these key files go into the AI's prompt on every deploy, and
+    through the medic into its replies to the repo's owner."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-platform-secret-123")
+    src = repo_with(tmp_path, {"src/app.js": "console.log(1)\n", "package.json": "{}\n"},
+                    {"README.md": "/proc/self/environ",
+                     "requirements.txt": outside / "work" / "other-tenant" / "secret.env",
+                     "Procfile": ".git/config",
+                     "index.js": "src/app.js",                  # inside: still read
+                     "server.js": "src"})                       # a directory: nothing to read
+    work = str(tmp_path / "work")
+    assert engine.clone_repo(str(src), "main", work).returncode == 0
+    tree, files = engine._snapshot(work)
+    assert set(files) == {"package.json", "index.js"}
+    assert files["index.js"] == "console.log(1)\n"
+    assert "README.md" in tree.split("\n")                      # listed, never read
+    for name in ("README.md", "requirements.txt", "Procfile", "server.js"):
+        assert engine.read_checkout_file(work, name) is None
+        assert engine._make_reader(work, lambda _l: None)(name) is None
+
+
+def test_a_heuristic_plan_reads_no_package_json_out_of_the_checkout(tmp_path, outside):
+    (outside / "next.json").write_text('{"dependencies": {"next": "15"}}')
+    root = tmp_path / "co"
+    root.mkdir()
+    (root / "package.json").symlink_to(outside / "next.json")
+    plan = engine.ai.heuristic_plan(str(root))
+    assert plan["notes"] == "heuristic: node app" and "next" not in plan["dockerfile"]
+    (root / "package.json").unlink()
+    (root / "package.json").write_text('{"dependencies": {"next": "15"}}')
+    assert "next" in engine.ai.heuristic_plan(str(root))["dockerfile"]
+
+
+def test_a_link_out_of_the_checkout_cannot_tell_whether_its_target_exists(tmp_path, outside):
+    """The plan shows in the deploy log; were a link's target looked up, a link into
+    another tenant's checkout would tell whether a file exists there."""
+    plans = []
+    for target in (outside / "work" / "other-tenant" / "secret.env",
+                   outside / "work" / "other-tenant" / "nothing-here"):
+        root = tmp_path / f"co{len(plans)}"
+        root.mkdir()
+        (root / "requirements.txt").symlink_to(target)
+        plans.append(engine.ai.heuristic_plan(str(root)))
+    assert plans[0] == plans[1] and plans[0]["notes"] == "heuristic: python app"
+
+
+def test_the_integration_audit_greps_only_files_in_the_checkout(tmp_path, outside):
+    (outside / "leak.js").write_text("fetch('https://api.other-tenant.example')\n")
+    root = tmp_path / "co"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "api.js").write_text("fetch('https://api.foreign.example')\n")
+    (root / "src" / "leak.js").symlink_to(outside / "leak.js")
+    (root / "src" / "alias.js").symlink_to(root / "src" / "api.js")
+    urls = ["https://api.foreign.example", "https://api.other-tenant.example"]
+    assert engine._grep_urls(str(root), urls) == {"https://api.foreign.example": ["src/api.js"]}
+
+
+def test_a_dockerignore_that_links_out_of_the_checkout_is_not_read(checkout, outside):
+    (outside / "patterns").write_text("src\n")
+    (checkout / ".dockerignore").symlink_to(outside / "patterns")
+    with engine._build_context(str(checkout), "Dockerfile") as context:
+        assert "src/app.py" in names_in(context)
+
+
+def test_the_plan_dockerfile_is_the_one_entry_of_its_name_whatever_the_repo_has(checkout):
+    (checkout / ".cx.Dockerfile").mkdir()
+    (checkout / ".cx.Dockerfile" / "x").write_text("x")
+    with engine._build_context(str(checkout), ".cx.Dockerfile", "FROM scratch\n") as context:
+        context.seek(0)
+        tar = tarfile.open(fileobj=context)
+        names = tar.getnames()
+        assert [n for n in names if n.startswith(".cx.Dockerfile")] == [".cx.Dockerfile"]
+        assert tar.extractfile(".cx.Dockerfile").read() == b"FROM scratch\n"

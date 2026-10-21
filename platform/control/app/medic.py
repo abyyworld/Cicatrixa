@@ -105,11 +105,8 @@ def investigate_sync(project_id: int, user_text: str):
             workdir, rest = next(iter(workdirs.values())), path
         if not workdir or not rest:
             return None
-        full = engine.inside_checkout(workdir, rest)
-        if full is None:
-            return None
         try:
-            return open(full, errors="replace").read(8000)
+            return engine.read_checkout_file(workdir, rest, 8000)
         except OSError:
             return None
 
@@ -431,19 +428,21 @@ def apply_fix_sync(project_id: int, message_id: int) -> tuple[int | None, str]:
             return None, "No patch could be applied — the repository has likely changed."
 
         # verify the patched tree still builds before touching the user's repo
-        dockerfile = None
+        dockerfile, dockerfile_text = None, None
         if os.path.exists(os.path.join(clone, "Dockerfile")):
             dockerfile = "Dockerfile"
         else:
-            cached = os.path.join(engine.WORK_ROOT, service["slug"], ".cx.Dockerfile")
-            if os.path.exists(cached):
-                shutil.copy(cached, os.path.join(clone, ".cx.Dockerfile"))
-                dockerfile = ".cx.Dockerfile"
+            # The plan's own, from beside the checkouts, handed to the build — never
+            # copied into this clone: its names are the repo's, and a committed
+            # .cx.Dockerfile can be a link to any file here (engine.PLAN_DOCKERFILE).
+            dockerfile_text = engine.read_plan_dockerfile(service["slug"])
+            if dockerfile_text is not None:
+                dockerfile = engine.PLAN_DOCKERFILE
         if dockerfile:
             status("🔨 verifying the patched code still builds…")
             try:
                 engine._build(clone, dockerfile, f"cx-{service['slug']}:chatfix-verify",
-                              lambda _l: None)
+                              lambda _l: None, dockerfile_text=dockerfile_text)
             except RuntimeError as exc:
                 return None, ("The patched code fails to build — not pushing. "
                               f"Build error: {str(exc)[-400:]}")

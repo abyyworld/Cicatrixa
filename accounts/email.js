@@ -1,5 +1,6 @@
 // Transactional email through Resend's HTTP API (no SDK, no SMTP): the verification
-// link and the password-reset link. Same look as platform/control/app/mailer.py.
+// link, the password-reset link and its finish-signing-up wording. Same look as
+// platform/control/app/mailer.py.
 
 const RESEND_URL = "https://api.resend.com/emails";
 
@@ -53,10 +54,11 @@ export function sendVerificationEmail(env, to, url) {
   return send(env, {
     to,
     subject: "Confirm your email for Cicatrixa",
-    text: `Confirm your email to finish creating your Cicatrixa account (link works for an hour): ${url}`,
+    text: "Confirm your email to finish creating your Cicatrixa account, then log in (link " +
+          `works for an hour): ${url}`,
     html: wrap("confirm your email", `
 <p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">Confirm this address to
-finish creating your Cicatrixa account. The link works for an hour.</p>
+finish creating your Cicatrixa account, then log in. The link works for an hour.</p>
 ${button(url, "Confirm my email →")}
 <p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Didn't sign up? Ignore this email —
 nothing happens without the link.</p>`),
@@ -74,5 +76,26 @@ the password for this Cicatrixa account. The link below works once and expires i
 ${button(url, "Choose a new password →")}
 <p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Didn't ask for this? Ignore this
 email — your password stays as it is.</p>`),
+  });
+}
+
+// The reset link for an address whose account was never confirmed (accounts/auth.js
+// sendResetPassword): someone signed up with it again, or asked for a reset before
+// confirming. Whoever made that account may not read this inbox — anyone can sign up with
+// any address — so the inbox's owner sets the password here, and it replaces whatever the
+// first sign-up chose.
+export function sendFinishSignUpEmail(env, to, url) {
+  return send(env, {
+    to,
+    subject: "Finish creating your Cicatrixa account",
+    text: "Finish creating your Cicatrixa account: set your password (link works once, for an " +
+          `hour; it replaces any password chosen at an earlier sign-up): ${url}`,
+    html: wrap("finish creating your account", `
+<p style="font-size:14.5px;line-height:1.6;color:#E4EEE7;margin:0 0 22px">Finish creating your
+Cicatrixa account: set your password. It replaces any password chosen at an earlier sign-up
+with this address. The link works once and expires in an hour.</p>
+${button(url, "Set my password →")}
+<p style="font-size:12.5px;color:#74857B;margin:18px 0 0">Didn't sign up? Ignore this email —
+nothing happens without the link.</p>`),
   });
 }

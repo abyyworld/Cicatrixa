@@ -267,6 +267,17 @@ MIGRATIONS: list[Migration] = [
             "ALTER TABLE users DROP COLUMN external_id",
         ],
     ),
+    Migration(
+        4, "imported_connections",
+        up=[
+            # The online user (Better Auth's user.id) whose cx_github row
+            # app.import_online copied this connection from; NULL for one made here.
+            # A later run removes an imported connection once it is gone online —
+            # its owner pressed Disconnect there — and so never one made here.
+            "ALTER TABLE github_connections ADD COLUMN external_id TEXT",
+        ],
+        down=["ALTER TABLE github_connections DROP COLUMN external_id"],
+    ),
 ]
 
 

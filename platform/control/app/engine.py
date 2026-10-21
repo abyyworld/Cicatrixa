@@ -7,9 +7,11 @@ at its sibling services.
 """
 import asyncio
 import base64
+import contextlib
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -183,6 +185,7 @@ def _run_pipeline(service, project, dep: int, log):
     # ---- clone ----
     workdir = os.path.join(WORK_ROOT, slug)
     shutil.rmtree(workdir, ignore_errors=True)
+    _drop_plan_dockerfile(slug)                 # it goes with the checkout it was for
     os.makedirs(workdir, exist_ok=True)
     log(f"⇣ cloning {service['repo_full']}@{service['branch']}")
     r = clone_repo(gh.clone_url(connection, service["repo_full"]), service["branch"], workdir)
@@ -221,13 +224,12 @@ def _run_pipeline(service, project, dep: int, log):
     last_error = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         log(f"🔨 build attempt {attempt}/{MAX_ATTEMPTS}")
-        dockerfile_rel = "Dockerfile"
+        dockerfile_rel, dockerfile_text = "Dockerfile", None
         if plan.get("dockerfile"):
-            dockerfile_rel = ".cx.Dockerfile"
-            with open(os.path.join(workdir, dockerfile_rel), "w") as f:
-                f.write(plan["dockerfile"])
+            dockerfile_rel, dockerfile_text = PLAN_DOCKERFILE, plan["dockerfile"]
+            _save_plan_dockerfile(slug, dockerfile_text)
         try:
-            build_log = _build(workdir, dockerfile_rel, image, log, buildargs)
+            build_log = _build(workdir, dockerfile_rel, image, log, buildargs, dockerfile_text)
         except RuntimeError as exc:
             last_error = str(exc)
             log(f"  build failed: {last_error[-400:]}")
@@ -285,15 +287,13 @@ def _sibling_info(service) -> list[dict]:
 def _make_reader(workdir: str, log):
     """Sandboxed file reader the AI uses to dig deeper into the repo."""
     def read_file(relpath: str):
-        full = inside_checkout(workdir, relpath)
-        if full is None:
-            return None
         try:
-            with open(full, errors="replace") as f:
-                log(f"  🔎 AI reading {relpath}")
-                return f.read(8000)
+            text = read_checkout_file(workdir, relpath, 8000)
         except OSError:
             return None
+        if text is not None:
+            log(f"  🔎 AI reading {relpath}")
+        return text
     return read_file
 
 
@@ -352,26 +352,105 @@ def inside_checkout(root: str, relpath: str) -> str | None:
     return full
 
 
-def _build_context(workdir: str, dockerfile: str):
+def read_checkout_file(root: str, relpath: str, limit: int = -1,
+                       errors: str = "replace") -> str | None:
+    """The text of `relpath` in the checkout at `root`, read as open(path) reads it —
+    or None unless it is a regular file inside the checkout (inside_checkout).
+
+    A repo chooses what its names point at: README.md -> /proc/self/environ (this
+    process's environment: every API key cx-control holds), requirements.txt -> another
+    tenant's checkout beside this one, Procfile -> .git/config. Each is one commit away,
+    and what is read here goes into the AI's prompt, and through the medic into replies
+    to the repo's owner. So every read of a name the repo chose comes through here. The
+    real path has no link left in it, so O_NOFOLLOW refuses only one made since; and
+    O_NONBLOCK, so a pipe is refused by the S_ISREG check instead of hanging the open."""
+    full = inside_checkout(root, relpath)
+    if full is None:
+        return None
+    try:
+        fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        regular = stat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError:
+        regular = False
+    if not regular:
+        os.close(fd)
+        return None
+    with open(fd, errors=errors) as f:                  # closes fd
+        return f.read(limit)
+
+
+# The Dockerfile the platform wrote for a repo that has none (the plan's). It is kept
+# beside the checkouts, never in one: a checkout's names are the repo's, and a repo that
+# commits `.cx.Dockerfile` as a link to /data/cicatrixa.db had the plan written through
+# it, over the platform's database. The build gets it as an extra file of its context,
+# under this name (_build_context), and the medic reads it from here. A slug has no dot
+# (main.make_slug, import_online._SLUG), so `<slug>.cx.Dockerfile` is never a checkout.
+PLAN_DOCKERFILE = ".cx.Dockerfile"
+
+
+def plan_dockerfile_path(slug: str) -> str:
+    return os.path.join(WORK_ROOT, slug + PLAN_DOCKERFILE)
+
+
+def _save_plan_dockerfile(slug: str, text: str):
+    # Whole or not at all: the medic may read it while a deploy writes it.
+    os.makedirs(WORK_ROOT, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=WORK_ROOT, prefix=f".{slug}.", suffix=".tmp")
+    try:
+        with open(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, plan_dockerfile_path(slug))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def read_plan_dockerfile(slug: str) -> str | None:
+    try:
+        with open(plan_dockerfile_path(slug)) as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def _drop_plan_dockerfile(slug: str):
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(plan_dockerfile_path(slug))
+
+
+def _build_context(workdir: str, dockerfile: str, dockerfile_text: str | None = None):
     """The tar docker-py 7.1's api.build(path=...) would send, minus .git.
 
     Its own rules, mirrored (api/build.py → utils.tar): the repo's .dockerignore
     patterns, with the Dockerfile always sent. .git goes whatever the .dockerignore
-    says: nothing in it is needed to build, and a `COPY .` would publish it."""
+    says: nothing in it is needed to build, and a `COPY .` would publish it.
+
+    With `dockerfile_text` (the plan's, which is not in the checkout), that text goes in
+    under the name `dockerfile`, and whatever the repo committed under that name stays
+    out: the build reads the platform's file, not one the repo planted."""
     # Here, not at the top: workspace/test/plan.test.js runs this module's planning
     # half under a python whose `docker` may be a stub.
     from docker.utils.build import create_archive, exclude_paths
     root = os.path.abspath(workdir)
-    patterns = []
-    ignore = os.path.join(root, ".dockerignore")
-    if os.path.exists(ignore):
-        with open(ignore, errors="replace") as f:
-            patterns = [p for p in (line.strip() for line in f.read().splitlines())
-                        if p and not p.startswith("#")]
+    # Through read_checkout_file, as every name the repo chose: a .dockerignore that
+    # links elsewhere would make that file's lines this build's patterns.
+    text = read_checkout_file(root, ".dockerignore") or ""
+    patterns = [p for p in (line.strip() for line in text.splitlines())
+                if p and not p.startswith("#")]
     # ".git" last, so no "!" exception before it brings any of it back; the filter
     # below is the guarantee, the pattern only spares walking it.
     files = exclude_paths(root, patterns + [".git"], dockerfile=dockerfile)
-    return create_archive(root, files=sorted(f for f in files if not _in_git_dir(f)))
+    extra = []
+    if dockerfile_text is not None:
+        # A directory of that name too, and all under it: one path, one entry.
+        files = {f for f in files if f != dockerfile and not f.startswith(dockerfile + os.sep)}
+        extra = [(dockerfile, dockerfile_text)]
+    return create_archive(root, files=sorted(f for f in files if not _in_git_dir(f)),
+                          extra_files=extra)
 
 
 def _build_args(service, siblings: list[dict], plan) -> dict:
@@ -391,13 +470,16 @@ def _build_args(service, siblings: list[dict], plan) -> dict:
     return args
 
 
-def _build(workdir: str, dockerfile: str, tag: str, log, buildargs: dict | None = None) -> str:
+def _build(workdir: str, dockerfile: str, tag: str, log, buildargs: dict | None = None,
+           dockerfile_text: str | None = None) -> str:
+    """Builds `workdir` as `tag`. `dockerfile_text`: the plan's Dockerfile, sent as
+    `dockerfile` in the context instead of anything of that name in the checkout."""
     api = dock().api
     out = []
     # memswap == memory means no swap on top: an over-limit step fails the build,
     # which the heal loop reports, rather than thrashing the host for everyone.
     limit = BUILD_MEM_MB * 1024 * 1024
-    with _build_context(workdir, dockerfile) as context:
+    with _build_context(workdir, dockerfile, dockerfile_text) as context:
         for chunk in api.build(fileobj=context, custom_context=True, dockerfile=dockerfile,
                                tag=tag, rm=True, decode=True, buildargs=buildargs or {},
                                container_limits={"memory": limit, "memswap": limit}):
@@ -752,13 +834,19 @@ def _grep_urls(workdir: str, urls: list[str]) -> dict[str, list[str]]:
         dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
         for fname in filenames:
             full = os.path.join(dirpath, fname)
+            rel = os.path.relpath(full, root)
             try:
-                if os.path.getsize(full) > 3_000_000:
+                # Files that are in the checkout itself, never a link: the repo points
+                # those anywhere (read_checkout_file), and a file a link names inside
+                # the checkout is found here under its own name.
+                st = os.lstat(full)
+                if not stat.S_ISREG(st.st_mode) or st.st_size > 3_000_000:
                     continue
-                content = open(full, errors="replace").read()
+                content = read_checkout_file(root, rel)
             except OSError:
                 continue
-            rel = os.path.relpath(full, root)
+            if content is None:
+                continue
             for u in urls:
                 if u in content and len(hits[u]) < 10:
                     hits[u].append(rel)
@@ -813,8 +901,8 @@ def _integration_audit(service, workdir, plan, port, container_name, sha,
     image2 = f"cx-{service['slug']}:{sha[:10]}-i"
     log("🔨 rebuilding with integration patches")
     try:
-        _build(workdir, ".cx.Dockerfile" if plan.get("dockerfile") else "Dockerfile",
-               image2, log, merged_args)
+        _build(workdir, PLAN_DOCKERFILE if plan.get("dockerfile") else "Dockerfile",
+               image2, log, merged_args, plan.get("dockerfile"))
     except RuntimeError as exc:
         log(f"  ✖ integration rebuild failed, keeping original build: {str(exc)[-300:]}")
         return
@@ -848,6 +936,7 @@ def delete_service(service, revoke_github: bool = True):
     except Exception:
         pass
     shutil.rmtree(os.path.join(WORK_ROOT, service["slug"]), ignore_errors=True)
+    _drop_plan_dockerfile(service["slug"])
     db.q("DELETE FROM deployments WHERE service_id=?", (service["id"],))
     db.q("DELETE FROM services WHERE id=?", (service["id"],))
     if revoke_github and service["repo_full"]:
@@ -897,11 +986,12 @@ def _snapshot(root: str) -> tuple[str, dict[str, str]]:
             break
     files = {}
     for name in KEY_FILES:
-        path = os.path.join(root, name)
-        if os.path.exists(path):
-            try:
-                with open(path, errors="replace") as f:
-                    files[name] = f.read(6000)
-            except Exception:
-                pass
+        # A key file the repo made a link out of the checkout is left out, not
+        # followed (read_checkout_file): these go into the AI's prompt verbatim.
+        try:
+            text = read_checkout_file(root, name, 6000)
+        except Exception:
+            continue
+        if text is not None:
+            files[name] = text
     return "\n".join(tree_lines), files

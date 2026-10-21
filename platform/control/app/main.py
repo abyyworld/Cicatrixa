@@ -87,6 +87,80 @@ def _signed_in(user_id: int, to: str = "/dashboard") -> RedirectResponse:
     return resp
 
 
+# ---------- ?error= ----------
+#
+# What a page may be sent back with in ?error=, and the sentence it then shows. Only
+# these codes, never a sentence: anyone can send a link to these pages with any text in
+# the URL, and none of it may appear under Cicatrixa's banner (a fake "reinstall the App
+# at …" would read as ours). First the online workspace's codes, in its words
+# (workspace/routes.js ERROR_CODES, site/workspace.js ERRORS — a test keeps them equal),
+# so a link made there reads the same once app.<domain> is this box; then this app's.
+# An unknown code shows GENERIC_ERROR.
+ERRORS = {
+    "app_missing": "GitHub connections aren't open yet.",
+    "state": "That GitHub link was started from another account or has expired. "
+             "Start again here.",
+    "no_code": "GitHub did not send an authorization. If the App is already installed, "
+               "use “Already installed? Connect it”.",
+    "not_yours": "That installation is not on your GitHub account or on an organisation you "
+                 "administer.",
+    "not_installed": "The App is not installed on your GitHub account or on an organisation "
+                     "you administer. Install it first.",
+    "taken": "That GitHub installation is already connected to another Cicatrixa account.",
+    "org_request": "GitHub sent your request to the organisation's owners. Once one of "
+                   "them approves it, that owner connects it from their own Cicatrixa "
+                   "account — or install the App on your own GitHub account instead.",
+    "github": "GitHub didn't answer as expected. Try again in a minute.",
+    "admin_only": "Only an admin can do that.",
+    "app_exists": "A GitHub App is already set up.",
+    "app_state": "That App creation link was started from another account or has expired. "
+                 "Start again.",
+    "app_failed": "GitHub didn't finish creating the App. Try again.",
+    "signin": "Sign in first.",
+    # this app's own
+    "trial_over": referrals.TRIAL_OVER,
+    "service_limit": "That would go over the number of services your plan allows.",
+    "database_limit": "That would go over the number of databases your plan allows.",
+    "no_user": "No such user.",
+    "bad_email": "That doesn't look like an email.",
+    "has_account": "That person already has an account.",
+    "payments_off": "Payments aren't live yet — email hello@cicatrixa.com and we'll set "
+                    "you up.",
+    "checkout": "Could not start checkout — try again in a minute.",
+}
+ONLINE_ERROR_CODES = ("app_missing", "state", "no_code", "not_yours", "not_installed",
+                      "taken", "org_request", "github", "admin_only", "app_exists",
+                      "app_state", "app_failed", "signin")
+GENERIC_ERROR = "Something went wrong. Try again."
+# A limit's sentence is told again from the signed-in account — what it allows and
+# uses now — when it still applies; the URL only says which one.
+_LIMIT_ERRORS = {
+    "service_limit": lambda user: metrics.check_service_count(user, extra=1),
+    "database_limit": lambda user: metrics.check_database_count(user, extra=1),
+}
+
+
+def with_error(path: str, code: str) -> RedirectResponse:
+    if code not in ERRORS:
+        raise ValueError(f"unknown error code {code}")
+    return RedirectResponse(f"{path}?{urlencode({'error': code})}", status_code=303)
+
+
+def url_error(request: Request, user=None) -> str | None:
+    """The sentence for the page's ?error= code: always ERRORS' words, never the URL's."""
+    code = (request.query_params.get("error") or "").strip()
+    if not code:
+        return None
+    if code in _LIMIT_ERRORS and user:
+        try:
+            now = _LIMIT_ERRORS[code](user)
+        except Exception:
+            now = None
+        if now:
+            return now
+    return ERRORS.get(code, GENERIC_ERROR)
+
+
 def make_slug(name: str) -> str:
     base = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")[:40] or "app"
     slug, n = base, 1
@@ -145,7 +219,21 @@ def _admit_imported() -> list[int]:
     instance's limits. One that does not stays 'new' with the reason in the log, and
     the next start tries again — after /admin raises a limit, say. All at once on a
     fresh box, the RAM gate would otherwise fail every one past the limit and email
-    its owner about it."""
+    its owner about it.
+
+    None of it before the operator's `python -m app.import_online --start` (RUNBOOK
+    "Leaving Vercel" step 7): that says app.<domain> has moved here and verified. Every
+    earlier step may restart cx-control — `docker compose up -d` after a fix to .env —
+    and a customer app started by then would run before app.<domain> is here, and be
+    dropped by verify-public.sh's restart of Traefik."""
+    if not db.setting(import_online.START_KEY):
+        waiting = db.one("SELECT COUNT(*) n FROM services s JOIN projects p "
+                         "ON p.id=s.project_id WHERE p.external_id IS NOT NULL AND "
+                         + import_online.WAITING)["n"]
+        if waiting:
+            print(f"import: {waiting} imported service(s) wait for "
+                  "`python -m app.import_online --start`", flush=True)
+        return []
     admitted, projects = [], set()
     for s in db.all_("SELECT s.*, p.user_id FROM services s JOIN projects p "
                      "ON p.id=s.project_id WHERE p.external_id IS NOT NULL AND "
@@ -342,7 +430,7 @@ async def verify_code_page(request: Request):
         return RedirectResponse("/login", status_code=303)
     qp = request.query_params
     return render(request, "verify_code.html", user=None, pending_email=user["email"],
-                  error=qp.get("error"), resent=qp.get("resent"), unsent=qp.get("unsent"),
+                  error=url_error(request), resent=qp.get("resent"), unsent=qp.get("unsent"),
                   wait=qp.get("wait"), blocked=qp.get("blocked"))
 
 
@@ -508,7 +596,7 @@ async def dashboard(request: Request):
                   is_paid=referrals.is_paid(user),
                   trial_days_left=referrals.trial_days_left(user),
                   billing_on=billing.available(), just_paid=qp.get("paid"),
-                  error=qp.get("error"), verified=qp.get("verified"),
+                  error=url_error(request, user), verified=qp.get("verified"),
                   password_reset=qp.get("password_reset"))
 
 
@@ -523,7 +611,7 @@ async def new_project_page(request: Request):
         return RedirectResponse("/connect/github", status_code=303)
     try:
         repos = await asyncio.to_thread(gh.list_repos, connection)
-        error = request.query_params.get("error")
+        error = url_error(request, user)
     except Exception as exc:
         repos, error = [], f"Could not list repositories: {exc}"
     return render(request, "new_project.html", user=user, repos=repos, error=error)
@@ -552,18 +640,15 @@ async def create_project(request: Request):
                         "ORDER BY id DESC LIMIT 1", (user["id"],))
     if not connection:
         return RedirectResponse("/connect/github", status_code=303)
-    ok, trial_err = referrals.can_deploy(user)
+    ok, _ = referrals.can_deploy(user)
     if not ok:
-        return RedirectResponse("/projects/new?error=" + trial_err.replace(" ", "+"),
-                                status_code=303)
+        return with_error("/projects/new", "trial_over")
     form = await request.form()
     repos = [r for r in form.getlist("repos") if r.strip()]
     if not repos:
         return RedirectResponse("/projects/new", status_code=303)
-    quota_err = metrics.check_service_count(user, extra=len(repos))
-    if quota_err:
-        return RedirectResponse("/projects/new?error=" + quota_err.replace(" ", "+"),
-                                status_code=303)
+    if metrics.check_service_count(user, extra=len(repos)):
+        return with_error("/projects/new", "service_limit")
     primary = form.get("primary") or repos[0]
     if primary in repos:  # primary service is deployed under the project subdomain
         repos.remove(primary)
@@ -605,7 +690,7 @@ async def project_page(request: Request, project_id: int):
                   service_mem=metrics.service_mem, service_disk=metrics.service_disk,
                   connection_url=dbprovision.connection_url,
                   chat=medic.history(project_id),
-                  error=request.query_params.get("error"))
+                  error=url_error(request, user))
 
 
 @app.post("/projects/{project_id}/chat")
@@ -658,10 +743,9 @@ async def redeploy(request: Request, project_id: int):
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
-    ok, trial_err = referrals.can_deploy(user)
+    ok, _ = referrals.can_deploy(user)
     if not ok:
-        return RedirectResponse(f"/projects/{project_id}?error="
-                                + trial_err.replace(" ", "+"), status_code=303)
+        return with_error(f"/projects/{project_id}", "trial_over")
     asyncio.create_task(engine.deploy_project(project_id, "manual"))
     return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
@@ -681,10 +765,9 @@ async def redeploy_service(request: Request, service_id: int):
     user, service = _own_service(request, service_id)
     if not service:
         return need_login(request)
-    ok, trial_err = referrals.can_deploy(user)
+    ok, _ = referrals.can_deploy(user)
     if not ok:
-        return RedirectResponse(f"/projects/{service['project_id']}?error="
-                                + trial_err.replace(" ", "+"), status_code=303)
+        return with_error(f"/projects/{service['project_id']}", "trial_over")
     asyncio.create_task(engine.deploy(service_id, "manual"))
     return RedirectResponse(f"/projects/{service['project_id']}", status_code=303)
 
@@ -708,14 +791,11 @@ async def add_service(request: Request, project_id: int, repo: str = Form(...),
                         "ORDER BY id DESC LIMIT 1", (user["id"],))
     if not connection:
         return RedirectResponse("/connect/github", status_code=303)
-    ok, trial_err = referrals.can_deploy(user)
+    ok, _ = referrals.can_deploy(user)
     if not ok:
-        return RedirectResponse(f"/projects/{project_id}?error="
-                                + trial_err.replace(" ", "+"), status_code=303)
-    quota_err = metrics.check_service_count(user, extra=1)
-    if quota_err:
-        return RedirectResponse(f"/projects/{project_id}?error="
-                                + quota_err.replace(" ", "+"), status_code=303)
+        return with_error(f"/projects/{project_id}", "trial_over")
+    if metrics.check_service_count(user, extra=1):
+        return with_error(f"/projects/{project_id}", "service_limit")
     sid = await _add_service(project_id, project["slug"], connection, repo,
                              branch.strip(), primary=False)
     asyncio.create_task(engine.deploy(sid, "manual"))
@@ -727,10 +807,8 @@ async def add_database(request: Request, project_id: int, name: str = Form("prim
     user, project = own_project(request, project_id)
     if not project:
         return need_login(request)
-    quota_err = metrics.check_database_count(user, extra=1)
-    if quota_err:
-        return RedirectResponse(f"/projects/{project_id}?error="
-                                + quota_err.replace(" ", "+"), status_code=303)
+    if metrics.check_database_count(user, extra=1):
+        return with_error(f"/projects/{project_id}", "database_limit")
     name = re.sub(r"[^a-zA-Z0-9_-]+", "", name.strip()) or "primary"
     # In the background, like deploys: the first one pulls postgres, which on a
     # slow line outlasts what a request may take behind Cloudflare. Progress goes
@@ -820,8 +898,7 @@ async def connect_github(request: Request):
     user = current_user(request)
     if not user:
         return need_login(request)
-    return render(request, "connect.html", user=user,
-                  error=request.query_params.get("error"))
+    return render(request, "connect.html", user=user, error=url_error(request, user))
 
 
 @app.get("/connect/github/start")
@@ -879,9 +956,8 @@ async def connect_setup(request: Request):
         return RedirectResponse("/login?" + urlencode({"next": "/connect/github"}),
                                 status_code=303)
 
-    def refuse(why: str):
-        return RedirectResponse("/connect/github?" + urlencode({"error": why}),
-                                status_code=303)
+    def refuse(code: str):
+        return with_error("/connect/github", code)
 
     # An organisation member asked for an install: GitHub sent the request to its
     # owners, and there is no installation yet. Binding anything here (a personal
@@ -889,12 +965,9 @@ async def connect_setup(request: Request):
     # member can never connect the organisation's installation — an owner does, from
     # their own account. It binds nothing, so it needs no state (as workspace/routes.js).
     if params.get("setup_action") == "request":
-        return refuse("GitHub sent your request to the organisation's owners. Once one of "
-                      "them approves it, that owner connects it from their own Cicatrixa "
-                      "account — or install the App on your own GitHub account instead.")
+        return refuse("org_request")
     if auth.gh_state_user_id(params.get("state")) != user["id"]:
-        return refuse("That GitHub link was not started from this account. "
-                      "Connect from this page.")
+        return refuse("state")
     try:
         wanted = int(params["installation_id"]) if params.get("installation_id") else None
     except ValueError:
@@ -903,11 +976,10 @@ async def connect_setup(request: Request):
                          "AND installation_id=? AND user_id=?", (wanted, user["id"])):
         return RedirectResponse("/projects/new", status_code=303)   # already theirs
     if not params.get("code"):
-        return refuse("GitHub did not send an authorization. If the App is already "
-                      "installed, use \"Already installed? Connect it\" below.")
+        return refuse("no_code")
     controlled = await asyncio.to_thread(gh.installations_user_controls, params["code"])
     if controlled is None:
-        return refuse("GitHub did not accept the authorization. Try again.")
+        return refuse("github")
 
     def bound_elsewhere(iid: int) -> bool:
         return bool(db.one("SELECT 1 FROM github_connections WHERE kind='app' "
@@ -915,17 +987,15 @@ async def connect_setup(request: Request):
 
     if wanted:
         if wanted not in controlled:
-            return refuse("That installation is not on your own GitHub account or an "
-                          "organisation you administer. Ask an owner to connect it.")
+            return refuse("not_yours")
         chosen = wanted
     else:
         free = [i for i in controlled if not bound_elsewhere(i)]
         if not free:
-            return refuse("The App is not installed on your GitHub account or on an "
-                          "organisation you administer. Install it first.")
+            return refuse("not_installed")
         chosen = max(free, key=lambda i: controlled[i].get("created_at") or "")
     if bound_elsewhere(chosen):
-        return refuse("That GitHub installation is already connected to another account.")
+        return refuse("taken")
     db.q("DELETE FROM github_connections WHERE user_id=? AND kind='app'", (user["id"],))
     db.q("INSERT INTO github_connections(user_id,kind,installation_id,gh_login,created_at)"
          " VALUES(?,?,?,?,?)", (user["id"], "app", chosen,
@@ -999,7 +1069,7 @@ async def _render_admin(request: Request, user, **extra) -> HTMLResponse:
                   pending_requests=invites.pending_requests(),
                   sent_invites=invites.sent_invites(),
                   mail_on=mailer.available(), mail_error=mailer.last_error,
-                  error=request.query_params.get("error"), **extra)
+                  error=url_error(request, user), **extra)
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -1019,7 +1089,7 @@ async def admin_reset_link(request: Request, user_id: int):
         return need_login(request)
     target = db.one("SELECT * FROM users WHERE id=?", (user_id,))
     if not target:
-        return RedirectResponse("/admin?error=No+such+user.", status_code=303)
+        return with_error("/admin", "no_user")
     return await _render_admin(request, user, reset_link=_reset_url(target),
                                reset_email=target["email"])
 
@@ -1103,10 +1173,9 @@ async def send_invite(request: Request, email: str = Form(...)):
         return need_login(request)
     email = email.strip().lower()
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-        return RedirectResponse("/admin?error=Invalid+email", status_code=303)
+        return with_error("/admin", "bad_email")
     if db.one("SELECT 1 FROM users WHERE email=?", (email,)):
-        return RedirectResponse("/admin?error=That+person+already+has+an+account",
-                                status_code=303)
+        return with_error("/admin", "has_account")
     await asyncio.to_thread(invites.send_invite, email, BASE_URL, user["id"])
     return RedirectResponse("/admin", status_code=303)
 
@@ -1147,19 +1216,14 @@ async def billing_checkout(request: Request):
     if not user:
         return need_login(request)
     if not billing.available():
-        return RedirectResponse(
-            "/dashboard?error=" + "Payments aren't live yet — email "
-            "hello@cicatrixa.com and we'll set you up.".replace(" ", "+"),
-            status_code=303)
+        return with_error("/dashboard", "payments_off")
     projects = db.one("SELECT COUNT(*) c FROM projects WHERE user_id=?",
                       (user["id"],))["c"]
     try:
         url = await asyncio.to_thread(billing.checkout_url, user, projects, BASE_URL)
         return RedirectResponse(url, status_code=303)
     except Exception:
-        return RedirectResponse(
-            "/dashboard?error=" + "Could not start checkout — try again in a "
-            "minute.".replace(" ", "+"), status_code=303)
+        return with_error("/dashboard", "checkout")
 
 
 @app.post("/api/webhooks/stripe")

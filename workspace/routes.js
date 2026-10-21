@@ -44,8 +44,9 @@ function redirect(location) {
 
 // What a page may be sent back with in ?error=. Only these codes, never a sentence: the
 // pages turn a code into their own words, so a link from anyone cannot put its text
-// under Cicatrixa's banner (site/workspace.js has the sentences, and the platform's
-// main.py sends the same codes).
+// under Cicatrixa's banner (site/workspace.js has the sentences). The platform's main.py
+// ERRORS has these codes in the same words, so a link made here reads the same once
+// app.<domain> is the box; platform/control/tests/test_accounts.py keeps them equal.
 export const ERROR_CODES = Object.freeze(["app_missing", "state", "no_code", "not_yours",
   "not_installed", "taken", "org_request", "github", "admin_only", "app_exists", "app_state",
   "app_failed", "signin"]);

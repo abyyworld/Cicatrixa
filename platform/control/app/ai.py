@@ -348,12 +348,22 @@ def smoke_verdict(url: str, status: int, body_snippet: str, logs: str) -> str:
 def heuristic_plan(root: str) -> dict:
     import os.path as op
 
+    # Here, not at the top: engine imports this module.
+    from .engine import read_checkout_file
+
+    # The name is in the checkout, whatever it is. lexists, not exists: a link's target
+    # is not looked up, so a link to a path outside cannot tell the deploy log whether
+    # that path exists (another tenant's checkout is beside this one). The workspace's
+    # port (workspace/plan.js rootFiles) sees names the same way.
     def has(*names):
-        return any(op.exists(op.join(root, n)) for n in names)
+        return any(op.lexists(op.join(root, n)) for n in names)
 
     if has("package.json"):
+        # Only a regular file in the checkout is read (read_checkout_file): one the repo
+        # linked elsewhere reads as unreadable, as a package.json that is not JSON does.
         try:
-            pkg = json.load(open(op.join(root, "package.json")))
+            text = read_checkout_file(root, "package.json", errors="strict")
+            pkg = json.loads(text) if text is not None else {}
         except Exception:
             pkg = {}
         deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
@@ -375,7 +385,7 @@ def heuristic_plan(root: str) -> dict:
                if has("requirements.txt") else
                "COPY pyproject.toml ./\nRUN pip install --no-cache-dir --prefer-binary .\n")
         entry = next((f for f in ("main.py", "app.py", "server.py", "run.py")
-                      if op.exists(op.join(root, f))), "main.py")
+                      if has(f)), "main.py")
         mod = entry[:-3]
         df = ("FROM python:3.12-slim\nWORKDIR /app\n" + req + "COPY . .\nEXPOSE 8000\n"
               "RUN pip install --no-cache-dir uvicorn || true\n"

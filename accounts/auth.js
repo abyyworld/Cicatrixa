@@ -10,7 +10,8 @@ import { LibsqlDialect } from "@libsql/kysely-libsql";
 import { betterAuth } from "better-auth";
 
 import { recordPasswordProof } from "../workspace/store.js";
-import { mailOn, sendResetPasswordEmail, sendVerificationEmail } from "./email.js";
+import { mailOn, sendFinishSignUpEmail, sendResetPasswordEmail,
+         sendVerificationEmail } from "./email.js";
 
 const SITE_ORIGINS = [
   "https://cicatrixa.com",
@@ -32,8 +33,31 @@ export function databaseClient(env = process.env) {
   return createClient({ url: env.TURSO_DATABASE_URL, authToken: env.TURSO_AUTH_TOKEN });
 }
 
-export function authOptions(env = process.env, client = databaseClient(env)) {
+// Asks Better Auth's own handler to email `email` a password link, as the visitor who sent
+// `request`: its per-visitor limit on /request-password-reset (3 a minute) then counts these
+// too, which auth.api would skip. Its answer is generic whether or not anything was sent.
+async function requestPasswordLink(auth, base, email, request) {
+  const headers = new Headers({ "content-type": "application/json" });
+  for (const name of ["origin", "x-forwarded-for", "x-real-ip", "user-agent"]) {
+    const value = request?.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  const res = await auth.handler(new Request(`${base}/api/auth/request-password-reset`, {
+    method: "POST", headers,
+    body: JSON.stringify({ email, redirectTo: `${base}/reset-password` }),
+  }));
+  if (!res.ok) console.error(`accounts: no password link for a repeated sign-up (${res.status})`);
+}
+
+// `self` returns the Better Auth instance built from these options (getAuth): two hooks
+// below act through it. Options built only to read the schema never call them.
+export function authOptions(env = process.env, client = databaseClient(env), self = () => null) {
   const base = baseURL(env);
+  const instance = () => {
+    const auth = self();
+    if (!auth) throw new Error("accounts: these options have no Better Auth instance (getAuth)");
+    return auth;
+  };
   // Without a mail key nobody could ever receive a verification link, so nobody
   // could log in. Then accounts work unverified, as the platform does with mail off.
   const verify = mailOn(env);
@@ -54,7 +78,22 @@ export function authOptions(env = process.env, client = databaseClient(env)) {
       resetPasswordTokenExpiresIn: 60 * 60,
       // A reset is how someone takes an account back: end every other session.
       revokeSessionsOnPasswordReset: true,
-      sendResetPassword: ({ user, url }) => sendResetPasswordEmail(env, user.email, url),
+      // An unconfirmed account's link is how its address is claimed (onExistingUserSignUp
+      // below, or forgot-password before confirming), so it reads as finishing the sign-up.
+      sendResetPassword: ({ user, url }) => (user.emailVerified
+        ? sendResetPasswordEmail(env, user.email, url)
+        : sendFinishSignUpEmail(env, user.email, url)),
+      // A sign-up for an address that already has an account (Better Auth answers it as
+      // if it were new, so nobody learns which addresses have one). If that account was
+      // never confirmed, whoever made it may not read the inbox: anyone can sign up first
+      // with someone else's address and their own password and wait for its owner. So the
+      // inbox gets a link to set the password; setting it replaces the first one, confirms
+      // the address and ends every session (onPasswordReset, revokeSessionsOnPasswordReset).
+      // A confirmed account gets nothing new: its owner logs in, or resets the password.
+      onExistingUserSignUp: async ({ user }, request) => {
+        if (user.emailVerified) return;
+        await requestPasswordLink(instance(), base, user.email, request);
+      },
       // The password was just chosen by someone holding an emailed link: the proof an
       // ADMIN_EMAILS address needs before it is an admin (workspace/routes.js
       // adminStatus). A confirmation link is not enough, because whoever signed up chose
@@ -67,13 +106,28 @@ export function authOptions(env = process.env, client = databaseClient(env)) {
         } catch (err) {
           console.error("accounts: could not record a password reset:", err?.message || err);
         }
+        // The link proves the inbox as well as a confirmation link does, so the person
+        // who finished signing up through it logs in straight away. If this write fails,
+        // logging in mails a confirmation link, as for any unconfirmed account.
+        if (user.emailVerified) return;
+        try {
+          const { internalAdapter } = await instance().$context;
+          await internalAdapter.updateUser(user.id, { emailVerified: true });
+        } catch (err) {
+          console.error("accounts: could not confirm the address after a reset:",
+                        err?.message || err);
+        }
       },
     },
     emailVerification: {
       sendOnSignUp: verify,
       // An unverified person who tries to log in gets a fresh link.
       sendOnSignIn: verify,
-      autoSignInAfterVerification: true,
+      // A confirmation link proves who reads the inbox, not who chose the password, so it
+      // opens no session: it lands on /login?verified=1 (the pages' callbackURL), and the
+      // person logs in with their own password. Signing in whoever clicked would sign the
+      // inbox's owner in to an account someone else holds the password to.
+      autoSignInAfterVerification: false,
       expiresIn: 60 * 60,
       sendVerificationEmail: ({ user, url }) => sendVerificationEmail(env, user.email, url),
     },
@@ -108,6 +162,9 @@ let cached;
 
 // One instance per warm function.
 export function getAuth(env = process.env) {
-  if (!cached) cached = betterAuth(authOptions(env));
+  if (!cached) {
+    const auth = betterAuth(authOptions(env, databaseClient(env), () => auth));
+    cached = auth;
+  }
   return cached;
 }

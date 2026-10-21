@@ -92,20 +92,27 @@
       is up, one command on the box imports every user (their passwords keep working), this
       GitHub App, every connection and every planned project. Then <code>app.cicatrixa.com</code>
       moves to the box, the platform deploys the projects, and everyone gets the email they
-      were promised. In this order, on the box in <code>/root/cicatrixa-platform</code>:</p>
+      were promised. Bring the box up with this workspace's <code>TURSO_DATABASE_URL</code>
+      already in its <code>.env</code>, so it takes no sign-ups before the import. Then, in this
+      order, on the box in <code>/root/cicatrixa-platform</code>:</p>
     <pre class="term"><span class="c"># 1. import: see what it would do, then do it</span>
 docker exec cx-control python -m app.import_online --dry-run
 docker exec cx-control python -m app.import_online
 <span class="c"># 2. Cloudflare DNS: move app and * to the box (or the tunnel), remove app from Vercel</span>
-<span class="c"># 3. verify, while no customer app runs yet</span>
+<span class="c"># 3. import again: what changed here until the move</span>
+docker exec cx-control python -m app.import_online
+<span class="c"># 4. verify, while no customer app runs yet</span>
 VERIFY_ALLOW_RESTART=1 ./verify-public.sh
-<span class="c"># 4. restart: imported projects start deploying</span>
+<span class="c"># 5. let the imported projects deploy, then restart: they start deploying</span>
+docker exec cx-control python -m app.import_online --start
 docker restart cx-control
-<span class="c"># 5. email everyone whose projects are deploying</span>
+<span class="c"># 6. email everyone whose projects are deploying</span>
 docker exec cx-control python -m app.import_online --notify</pre>
-    <p class="muted small">Leave out step 5 and nobody hears that deploying opened. The steps
-      around these — the box, <code>platform/.env</code>, Vercel's domain — are in
-      <code>docs/RUNBOOK.md</code>, section “Leaving Vercel”.</p>
+    <p class="muted small">Leave out step 3 and whatever changed here after the first import —
+      sign-ups, password resets, projects — is lost. Until step 5's <code>--start</code>, no
+      restart deploys anything imported. Leave out step 6 and nobody hears that deploying
+      opened. The steps around these — the box, <code>platform/.env</code>, Vercel's domain —
+      are in <code>docs/RUNBOOK.md</code>, section “Leaving Vercel”.</p>
   </div>
 </div>
 </div></main>

@@ -4,9 +4,9 @@ Until the platform (`platform/`) runs on a machine with Docker, `app.cicatrixa.c
 **Vercel** function pair beside the marketing site, users and projects in the **Turso** database
 `cicatrixa-prod`, emails through **Resend**. All three are free, and none needs a server of ours.
 
-What a person can do today: sign up → confirm their email → connect GitHub (the platform's own
-GitHub App) → pick repos → Cicatrixa reads each repo through the GitHub API, works out how to run
-it and writes the Dockerfile, live in a log → the project is **planned** and keeps its
+What a person can do today: sign up → confirm their email → log in → connect GitHub (the
+platform's own GitHub App) → pick repos → Cicatrixa reads each repo through the GitHub API, works
+out how to run it and writes the Dockerfile, live in a log → the project is **planned** and keeps its
 `<name>.cicatrixa.com` address. Nothing is built or run: there is no Docker host. When there is
 one, a single command moves everyone over and the planned projects deploy on their own
 (docs/RUNBOOK.md, "Leaving Vercel"). `/demo` shows the recorded self-heal run.
@@ -14,7 +14,7 @@ one, a single command moves everyone over and the planned projects deploy on the
 | Piece | File |
 |---|---|
 | Better Auth config (passwords, sessions, rate limits, email hooks) | `accounts/auth.js` |
-| The emails (confirm address, reset password) | `accounts/email.js` |
+| The emails (confirm address, reset password, finish signing up) | `accounts/email.js` |
 | Account tables, created on the first request | `accounts/schema.js` |
 | `/api/auth/*` (sign-up, login, reset…) | `api/auth.js` |
 | Workspace API: GitHub connect, repos, projects, analysis, admin, webhook | `workspace/routes.js`, served by `api/workspace.js` |
@@ -55,7 +55,9 @@ one, a single command moves everyone over and the planned projects deploy on the
    you** → open the emailed link and set your password. A confirmed address alone is not enough:
    anyone can sign up with your address first and get you to click its confirmation link, so admin
    also needs a password set through an emailed reset link (`cx_setting` row `pw_proof:<userId>`,
-   written by `onPasswordReset`).
+   written by `onPasswordReset`). If someone signed up with your address before you did, signing
+   up yourself mails you **Finish creating your Cicatrixa account**: the password you set through
+   it replaces theirs and is that proof, so you are admin at once.
 6. **The GitHub App** — once: **Admin** → **Create the GitHub App** → GitHub asks you to confirm →
    done. Its keys are stored in Turso (`cx_setting`), the secret ones encrypted with
    `BETTER_AUTH_SECRET`. This is the very App the platform uses later, at the same URLs, so nobody
@@ -63,6 +65,21 @@ one, a single command moves everyone over and the planned projects deploy on the
    step, the Connect page says GitHub connections open shortly.
 
 Without `RESEND_API_KEY`, accounts still work, but unconfirmed, and nobody is admin.
+
+## Who owns an address
+
+Anyone can sign up with any address, so neither a sign-up nor its confirmation link shows who
+chose the password. So (`accounts/auth.js`):
+
+- A confirmation link opens no session. It lands on `/login?verified=1`, and people log in with
+  their own password.
+- A second sign-up for an address that was never confirmed mails it **Finish creating your
+  Cicatrixa account**, a reset link. The password set through it replaces the first sign-up's,
+  confirms the address and ends every session. So whoever signed up first with someone else's
+  address loses the account to its inbox the moment the inbox's owner uses it.
+- A password set through any emailed reset link confirms the address.
+- A sign-up for a confirmed address sends nothing new: its owner logs in, or resets.
+- Every sign-up gets the same answer, so the page never shows which addresses have an account.
 
 ## When something is wrong
 
@@ -85,6 +102,7 @@ If Turso archived the database after a long idle stretch (free plan),
 
 - Per user: 5 services, 20 analyses a day. Rate limits on sign-in/sign-up/reset are per IP, per
   minute, stored in the database (5 sign-ins, 5 sign-ups, 3 reset requests, 3 resends, 5 resets).
+  A repeat sign-up's finish link counts as one of that visitor's reset requests.
 - An analysis must finish inside one Vercel function call (60 s); the AI gets about 50 s of it,
   then the built-in rules take over.
 - Resend free: 3,000 emails a month, 100 a day. Turso free: 5 GB, 500M row reads, 10M writes a month.

@@ -325,17 +325,41 @@ their own. Do it in this order, in one sitting: the online workspace keeps takin
 
 Why this order. The box takes **no sign-ups** while `TURSO_DATABASE_URL` is set and no import has
 committed: an account made there first would sit on an address whose owner is still online (the
-box answers on any host name once `*` points at it, and with email off it confirms sign-ups
-without proof). Neither `app` nor `*` moves before the import, and the import never merges an
-online account into one already on the box unless you ask (step 4). The certificate for `app.` is
-proved before any customer app runs, because only then may `verify-public.sh` restart Traefik.
-And people hear that their projects deploy only once they really have started, on the box the
-email links to.
+box answers on any host name once `*` points at it — a VPS on its IP address before that — and
+with email off it confirms sign-ups without proof). So it has `TURSO_DATABASE_URL` from its very
+first start (step 1). Neither `app` nor `*` moves before the import, and the import never merges
+an online account into one already on the box unless you name its address (step 4). Nothing
+imported deploys before step 7's `--start`, however often cx-control restarts on the way. The
+certificate for `app.` is proved before any customer app runs, because only then may
+`verify-public.sh` restart Traefik. And people hear that their projects deploy only once they
+really have started, on the box the email links to.
 
-**1. Bring the box up, DNS untouched** — any way above (`bootstrap.sh`, the cloud-init stub, or
-`tunnel.sh`), but skip its DNS step: `app` stays on Vercel and `*` where it is (tunnel mode:
-create the tunnel and run `tunnel.sh`, but add no routes and change no records yet). The script
-then ends `PENDING` (exit 2). That is expected here; step 6 finishes it.
+**1. Bring the box up with the online workspace's address, DNS untouched** — any way above
+(`bootstrap.sh`, the cloud-init stub, or `tunnel.sh`), with Vercel's `TURSO_DATABASE_URL` (the
+Vercel project's **Settings → Environment Variables**) passed to it, so that its very first start
+already refuses sign-ups. Skip its DNS step: `app` stays on Vercel and `*` where it is (tunnel
+mode: create the tunnel and run `tunnel.sh`, but add no routes and change no records yet).
+
+- `bootstrap.sh` or `tunnel.sh`: pass the rest of step 2's values on the same line too; both write
+  them into `.env` before the first start (`tunnel.sh`: add `CLOUDFLARE_TUNNEL_TOKEN=eyJ...`):
+
+  ```bash
+  BASE_DOMAIN=cicatrixa.com ADMIN_EMAILS=kenny09077@gmail.com,annolieberto@gmail.com \
+    TURSO_DATABASE_URL=libsql://cicatrixa-prod-akbarjuraev.<region>.turso.io \
+    TURSO_AUTH_TOKEN=eyJ... BETTER_AUTH_SECRET=... OPENAI_API_KEY=sk-... \
+    RESEND_API_KEY=re_... MAIL_FROM='Cicatrixa <noreply@cicatrixa.com>' ./bootstrap.sh
+  ```
+
+- The cloud-init stub: add only `TURSO_DATABASE_URL=libsql://...` to its last line, beside
+  `BASE_DOMAIN`. It is not a secret — nothing reads the database without its token — and the
+  token and every key stay out of user data (any container on the box can read it); they go in
+  over SSH at step 2.
+
+Started without `TURSO_DATABASE_URL`, the box would take sign-ups until step 3 — a VPS's `:80`
+answers on its IP address for any host name — and with email off confirm them on the spot. Step 4
+lists any account made that way as "already has an account here" and merges none of them.
+
+The script then ends `PENDING` (exit 2). That is expected here; step 6 finishes it.
 
 Let's Encrypt allows **5 failed authorizations per hostname per hour**, and each start of Traefik
 while `app` still points at Vercel spends one on `app.cicatrixa.com` (its challenge lands on
@@ -343,7 +367,8 @@ Vercel). So do not restart the stack over and over before step 5. Tunnel mode ha
 Encrypt.
 
 **2. Give the box what Vercel has** — the values in the Vercel project's **Settings → Environment
-Variables**, added to `platform/.env` on the box (`/root/cicatrixa-platform/.env`):
+Variables**, in `platform/.env` on the box (`/root/cicatrixa-platform/.env`): whatever step 1 did
+not already write there (after the cloud-init stub, all but `TURSO_DATABASE_URL`):
 
 ```bash
 TURSO_DATABASE_URL=libsql://cicatrixa-prod-akbarjuraev.<region>.turso.io
@@ -379,6 +404,8 @@ cd /root/cicatrixa-platform && docker compose up -d
 ```
 
 Until step 4 commits, the box's sign-up page says sign-ups open shortly and makes no account.
+Restarting cx-control here, or at any step before 7, deploys nothing: imported projects wait for
+step 7's `--start`.
 
 **4. Import** — first see what it would do (`--dry-run` writes nothing), then do it. It emails
 nobody:
@@ -390,12 +417,13 @@ docker exec cx-control python -m app.import_online
 
 | it prints | meaning |
 |---|---|
-| `⚠ RESEND_API_KEY is empty here` | step 2 is not done: add the key, `docker compose up -d`, run it again |
+| `⚠ RESEND_API_KEY is empty here` | step 2 is not done: add the key, `docker compose up -d` (it deploys nothing yet), run it again |
 | `GitHub App: id … copied` | the App's keys are on the box; nobody connects GitHub again |
-| `✗ someone@…: already has an account here (made here …, email …, N projects, GitHub …)` | an account with that address was made on the box, and nothing shows it is the same person. It is **not merged**: that person, their connection and their projects stay out. If the account listed is really theirs (yours, made with `app.promote`, say), run the import again with `--link-existing` — it merges only accounts that confirmed the address on both sides, and the account here keeps its own password |
+| `✗ someone@…: already has an account here (made here …, email …, N projects, GitHub …)` | an account with that address was made on the box, and nothing shows it is the same person. It is **not merged**: that person, their connection and their projects stay out. If the account listed is really theirs (yours, made with `app.promote`, say), run the import again with `--link-existing someone@example.com` (`a@x,b@y` for more) — it merges only the addresses it names, and of those only accounts that confirmed the address on both sides; the account here keeps its own password. Name only accounts you know are theirs: one somebody else made here with their address sits in the same list |
 | `new admins: …` | addresses in the box's `ADMIN_EMAILS` that confirmed their email online and set their password through an emailed link. `! … is in ADMIN_EMAILS but its password was never set …`: not admin — `docker exec cx-control python -m app.promote you@example.com` |
 | `✗ … installation N is connected to another account here` | the box already binds installation N to another account, and one installation belongs to one account, so the owner cannot connect it from the Connect page either. Find out which account really owns it (online, this person does). If the binding here is stale, remove it — `docker exec cx-control python -c "from app import db; db.q('DELETE FROM github_connections WHERE installation_id=N')"` — and run the import again. Until then their projects are held back |
-| `held back (they wait …)`, then `✗ shop (shop) of …: …` | projects that will not deploy at step 7 whatever the limits: their owner has no GitHub connection here, or is an account made here with no trial left. The first restart of cx-control after that changes deploys them |
+| `held back (they wait …)`, then `✗ shop (shop) of …: …` | projects that will not deploy at step 7 whatever the limits: their owner has no GitHub connection here, or is an account made here with no trial left. From step 7 on, the first restart of cx-control after that changes deploys them |
+| `− someone@…: installation N was disconnected online since; removed here` | on a later run: its owner pressed Disconnect online after an earlier run. The connection the import brought over goes too, and their projects are held back until they connect GitHub here (a connection made on the box is never removed) |
 | `capacity: …` with `✗` lines | more waits to deploy than this box's limits allow: the instance's service count or RAM, or an account's quota (the default runs 2 services at once). Set them in `/admin` (instance limits; quotas per user) after step 5 and **before step 7**. What does not fit is not failed: it waits, and a later restart starts it |
 | `✗ shop (shop): shop.cicatrixa.com is taken here; not imported` | a project on the box already has that address. The owner makes the project again, under another name |
 | `import refused, nothing was written: … different GitHub App` | the box made its own App. One App per instance: installations made on one mean nothing to the other |
@@ -403,8 +431,9 @@ docker exec cx-control python -m app.import_online
 
 Running it again is safe. It adds what is new; carries over a password reset and an email confirmed
 online since (for accounts still on their online password — one chosen here is never overwritten);
-removes projects deleted online that never deployed here (one that has deployed is kept and named);
-and never brings back a project deleted here.
+removes projects deleted online that never deployed here (one that has deployed is kept and named)
+and GitHub connections it brought over that were disconnected online since; and never brings back a
+project deleted here.
 
 **5. Move `app` and `*` to the box** — then nothing points at Vercel's workspace any more:
 
@@ -432,20 +461,25 @@ cd /root/cicatrixa-platform && VERIFY_ALLOW_RESTART=1 ./verify-public.sh
 
 Exit 0: `app.cicatrixa.com` serves a trusted certificate. `VERIFY_ALLOW_RESTART=1` lets it restart
 Traefik once, to retry the certificate request that failed while `app` pointed at Vercel — safe
-only now: nothing imported has deployed yet (only step 7 starts them; a push to their repos does
-not), and later a restart would drop every customer app. If it reports Let's Encrypt refusing
+only now: nothing imported has deployed yet (nothing starts them before step 7's `--start`: not a
+restart of cx-control, not a push to their repos), and later a restart would drop every customer
+app. If it reports Let's Encrypt refusing
 "too many failed authorizations", wait out the hour and run it again. Do not go on until it
 passes: the next steps send people here to sign in.
 
-**7. Restart cx-control — the imported projects deploy:**
+**7. Let the imported projects deploy, and restart cx-control — they start:**
 
 ```bash
+docker exec cx-control python -m app.import_online --start
 docker restart cx-control && docker logs -f cx-control
 ```
 
-As it starts it deploys every imported service that has never been deployed — for owners allowed
-to deploy (an imported account's 14-day trial started at the import), with a GitHub connection,
-within the account's and the instance's limits. What does not fit stays waiting, with
+`--start` records that `app` is here and verified, and lists what waits and what is held back, as
+the import did. Until it has run, no start of cx-control deploys anything imported (each one logs
+`import: N imported service(s) wait for ...`). From the restart on, as it starts it deploys every
+imported service that has never been deployed — for owners allowed to deploy (an imported
+account's 14-day trial started at the import), with a GitHub connection, within the account's and
+the instance's limits. What does not fit stays waiting, with
 `import: <slug> waits: <why>` in the log; raise the limit in `/admin` and restart again to start it.
 
 **8. Tell people:**

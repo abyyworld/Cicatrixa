@@ -12,6 +12,11 @@
 # or, from a checkout:
 #   BASE_DOMAIN=cicatrixa.com ./bootstrap.sh
 #
+# A box that takes over the online workspace (docs/RUNBOOK.md, "Leaving Vercel") gets
+# Vercel's TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, BETTER_AUTH_SECRET, RESEND_API_KEY and
+# MAIL_FROM on this same line: from its very first start it then takes no sign-ups
+# until the import, instead of taking them on its IP address until .env is edited.
+#
 # A rebuilt server is then one command and a DNS record, which is the whole
 # point: nothing in this stack is tied to the machine it last ran on.
 set -euo pipefail
@@ -20,7 +25,8 @@ set -euo pipefail
 # re-run can tell "you passed this" from "the script filled this in" — only the
 # former may overwrite a value already in .env.
 SETTINGS="BASE_DOMAIN BASE_URL OPENAI_API_KEY AI_MODEL ADMIN_EMAILS RESEND_API_KEY
-MAIL_FROM STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET"
+MAIL_FROM STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET TURSO_DATABASE_URL TURSO_AUTH_TOKEN
+BETTER_AUTH_SECRET"
 PASSED=""
 for v in $SETTINGS; do
   [ -n "${!v:-}" ] && PASSED="$PASSED $v"
@@ -123,6 +129,9 @@ RESEND_API_KEY=${RESEND_API_KEY:-}
 MAIL_FROM=${MAIL_FROM:-Cicatrixa <noreply@$BASE_DOMAIN>}
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
 STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
+TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
+BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-}
 ENV
   echo "  wrote .env for $BASE_DOMAIN"
 fi

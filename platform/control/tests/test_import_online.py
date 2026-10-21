@@ -404,7 +404,7 @@ def test_link_existing_merges_when_both_sides_confirmed_and_the_box_password_sta
     uid = box_account("ada@example.com")
     before = box_user("ada@example.com")["pw_hash"]
     ada_online(turso)
-    report = run(link_existing=True)
+    report = run(link_existing="Ada@Example.com")
     assert report.users_linked == ["ada@example.com"] and report.users_new == 0
     row = box_user("ada@example.com")
     assert row["id"] == uid and row["pw_hash"] == before and row["external_id"] == "u-ada"
@@ -421,7 +421,7 @@ def test_link_existing_never_merges_a_side_that_did_not_confirm(
         turso, box_verified, online_verified, why):
     box_account("ada@example.com", verified=box_verified)
     ada_online(turso, verified=online_verified)
-    report = run(link_existing=True)
+    report = run(link_existing="ada@example.com")
     assert report.users_linked == [] and why in report.users_existing[0]
     assert box_user("ada@example.com")["external_id"] is None
     assert db.one("SELECT 1 FROM projects WHERE external_id='p-blog'") is None
@@ -600,10 +600,10 @@ def test_a_dry_run_reports_everything_and_writes_nothing(turso):
     assert run().users_new == 2                                # and the real run still can
 
 
-def test_a_database_before_migration_3_is_refused(turso):
+def test_a_database_before_migration_4_is_refused(turso):
     online_world(turso)
-    db.migrate_down(2)
-    with pytest.raises(import_online.Refused, match="schema version 2"):
+    db.migrate_down(3)
+    with pytest.raises(import_online.Refused, match="schema version 3"):
         run()
     assert turso.calls == []                                   # not even read
 
@@ -808,8 +808,10 @@ def test_the_command_notifies_only_when_asked_and_never_with_import_flags(
     monkeypatch.setattr(import_online, "SEND_INTERVAL", 0)
     assert import_online.main(["--notify"]) == 0
     assert [to for to, _, _ in mail.sent] == ["ada@example.com"]
-    with pytest.raises(SystemExit):
-        import_online.main(["--notify", "--link-existing"])
+    for flags in (["--notify", "--link-existing", "ada@example.com"],
+                  ["--start", "--link-existing", "ada@example.com"], ["--start", "--notify"]):
+        with pytest.raises(SystemExit):
+            import_online.main(flags)
 
 
 def test_the_command_will_not_conjure_a_database(tmp_path, monkeypatch, capsys):
@@ -839,6 +841,7 @@ def test_startup_deploys_only_imported_services_never_deployed(turso, monkeypatc
     db.q("INSERT INTO services(project_id,name,slug,repo_full,created_at) VALUES(?,?,?,?,?)",
          (native, "native", "native", "acme/native", db.now()))
 
+    import_online.start()
     started = boot(monkeypatch)
     shop = [s["id"] for s in db.all_(
         "SELECT s.id FROM services s JOIN projects p ON p.id=s.project_id "
@@ -895,6 +898,7 @@ def test_startup_leaves_what_does_not_fit_the_quota_waiting_and_says_why(
     in the pipeline, mark it failed and email its owner, with no retry."""
     three_service_world(turso)
     run()
+    import_online.start()
     started = boot(monkeypatch)
     ids = [s["id"] for s in db.all_("SELECT id FROM services ORDER BY id")]
     assert started == [(ids[0], "import"), (ids[1], "import")]
@@ -910,6 +914,7 @@ def test_startup_leaves_what_does_not_fit_the_quota_waiting_and_says_why(
 def test_startup_respects_the_instance_limits(turso, monkeypatch, capsys):
     online_world(turso)
     run()
+    import_online.start()
     metrics.set_global_limits(2, 10, 6144)                    # the box holds 3 services
     assert boot(monkeypatch) == []
     assert "Instance-wide service limit reached" in capsys.readouterr().out
@@ -921,6 +926,7 @@ def test_startup_holds_back_an_owner_without_a_github_connection(turso, monkeypa
     run()
     owner = box_user("owner@example.com")["id"]
     db.q("DELETE FROM github_connections WHERE user_id=?", (owner,))
+    import_online.start()
     started = boot(monkeypatch)
     blog = db.one("SELECT id FROM services WHERE slug='blog'")["id"]
     assert started == [(blog, "import")]
@@ -971,3 +977,185 @@ def test_sign_ups_wait_while_the_online_workspace_is_still_to_come(turso, client
 def test_without_an_online_workspace_sign_ups_are_open(client, monkeypatch):
     monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
     assert 'action="/signup"' in client.get("/signup").text
+
+
+# ---------- --link-existing names the addresses it merges ----------
+
+def test_link_existing_merges_only_the_addresses_it_names(turso, client, monkeypatch):
+    """The review's PoC: before sign-ups were closed from the first start, a squatter
+    could sign up here as the victim (email off: confirmed on the spot) and sit in the
+    same "already has an account here" list as the operator's own account. A bare
+    --link-existing, meant for the operator's, merged the squatter's too."""
+    monkeypatch.setattr(mailer, "RESEND_API_KEY", "")
+    monkeypatch.delenv("TURSO_DATABASE_URL", raising=False)
+    r = client.post("/signup", data={"email": "victim@example.com", "password": "attacker-pw"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and box_user("victim@example.com")["email_verified"] == 1
+    mine = box_account("ada@example.com")                    # the operator's, legitimately
+    ada_online(turso)
+    turso.user("u-victim", "victim@example.com")
+    turso.github("u-victim", 8888, "victim")
+    turso.project("p-v", "u-victim", "vproj", "vproj", [("vproj", "vproj", "victim/secret", "main")])
+    report = run(link_existing="ada@example.com")
+    assert report.users_linked == ["ada@example.com"]
+    assert [e.split(":")[0] for e in report.users_existing] == ["victim@example.com"]
+    assert db.one("SELECT 1 FROM github_connections WHERE installation_id=8888") is None
+    assert db.one("SELECT user_id FROM github_connections WHERE installation_id=7777")[
+        "user_id"] == mine
+    assert "--link-existing and its address" in report.summary()
+
+
+def test_link_existing_says_when_an_address_it_names_had_nobody_to_link(turso):
+    box_account("ada@example.com")
+    ada_online(turso)
+    report = run(link_existing="ada@example.com, nobody@example.com")
+    assert report.users_linked == ["ada@example.com"]
+    assert report.link_unused == ["nobody@example.com"]
+    assert "--link-existing names nobody@example.com, but no online account" in report.summary()
+
+
+def test_link_existing_takes_addresses_not_a_yes(turso, monkeypatch, capsys):
+    ada_online(turso)
+    with pytest.raises(TypeError):
+        run(link_existing=True)
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    assert import_online.main(["--link-existing", "ada"]) == 1
+    assert "takes email addresses" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        import_online.main(["--link-existing"])                 # it needs the addresses
+
+
+# ---------- a GitHub disconnect online is carried over ----------
+
+def test_a_github_disconnect_online_since_is_carried_over(turso, monkeypatch):
+    """The review's PoC: Disconnect online deletes the cx_github row and leaves the
+    projects. A re-run left the box's binding, so --start and a restart cloned and
+    deployed the blog through the installation its owner had disconnected."""
+    ada_online(turso)
+    run()
+    turso.db.execute("DELETE FROM cx_github WHERE userId='u-ada'")          # Disconnect online
+    report = run()
+    assert db.one("SELECT 1 FROM github_connections WHERE installation_id=7777") is None
+    assert report.connections_removed == [
+        "ada@example.com: installation 7777 was disconnected online since; removed here"]
+    assert report.held_back == ["blog (blog) of ada@example.com: no GitHub connection here"]
+    assert "installation 7777 was disconnected online" in report.summary()
+    import_online.start()
+    assert boot(monkeypatch) == []
+
+
+def test_another_installation_connected_online_since_replaces_the_imported_one(turso):
+    ada_online(turso)
+    run()
+    turso.db.execute("UPDATE cx_github SET installationId=7778 WHERE userId='u-ada'")
+    report = run()
+    rows = db.all_("SELECT installation_id, external_id FROM github_connections")
+    assert [(r["installation_id"], r["external_id"]) for r in rows] == [(7778, "u-ada")]
+    assert report.connections_new == 1 and len(report.connections_removed) == 1
+
+
+def test_a_connection_made_here_is_never_removed_by_a_re_run(turso):
+    """Only what the import brought over follows the online workspace: a connection
+    its owner made on the box is theirs, whatever the online table says."""
+    ada_online(turso)
+    turso.db.execute("DELETE FROM cx_github")
+    run()
+    ada = box_user("ada@example.com")["id"]
+    db.q("INSERT INTO github_connections(user_id,kind,installation_id,created_at) "
+         "VALUES(?,'app',7777,?)", (ada, db.now()))                       # Connect, here
+    report = run()
+    assert db.one("SELECT 1 FROM github_connections WHERE installation_id=7777")
+    assert report.connections_removed == []
+
+
+def test_without_the_online_github_table_no_connection_is_removed(turso, monkeypatch):
+    ada_online(turso)
+    run()
+    real = import_online.fetch
+
+    def without_github(base, token):
+        data = real(base, token)
+        data["tables"] = [t for t in data["tables"] if t["name"] != "cx_github"]
+        data["github"] = []
+        return data
+
+    monkeypatch.setattr(import_online, "fetch", without_github)
+    assert run().connections_removed == []
+    assert db.one("SELECT 1 FROM github_connections WHERE installation_id=7777")
+
+
+# ---------- nothing imported deploys before --start ----------
+
+def test_no_restart_deploys_anything_imported_before_start(turso, monkeypatch, capsys):
+    """RUNBOOK step 4's remedies restart cx-control (`docker compose up -d` after a fix
+    to .env), and step 6 may restart Traefik: a customer app deployed by then would run
+    before app.<domain> is here, and be dropped. Only the operator's --start opens it."""
+    online_world(turso)
+    report = run()
+    assert "nothing deploys yet" in report.summary() and "--start" in report.summary()
+    assert boot(monkeypatch) == [] and boot(monkeypatch) == []
+    assert "import: 3 imported service(s) wait for `python -m app.import_online --start`" \
+        in capsys.readouterr().out
+    assert {s["status"] for s in db.all_("SELECT status FROM services")} == {"new"}
+    assert count("deployments") == 0
+    started = import_online.start()
+    assert started.waiting == 3 and "Recorded" in started.summary()
+    assert len(boot(monkeypatch)) == 3
+    assert "--start has run here" in run().summary()
+
+
+def test_start_needs_an_import_and_records_nothing_on_a_dry_run(turso):
+    with pytest.raises(import_online.Refused, match="nothing has been imported here yet"):
+        import_online.start()
+    online_world(turso)
+    run()
+    assert "DRY RUN" in import_online.start(dry_run=True).summary()
+    assert db.setting(import_online.START_KEY) is None
+    first = import_online.start()
+    again = import_online.start()
+    assert not first.since and again.since and "already ran" in again.summary()
+
+
+def test_the_start_command_prints_what_waits_or_refuses_with_exit_1(turso, capsys):
+    assert import_online.main(["--start"]) == 1
+    assert "start refused, nothing was recorded" in capsys.readouterr().err
+    three_service_world(turso)
+    run()
+    assert import_online.main(["--start"]) == 0
+    out = capsys.readouterr().out
+    assert "3 imported service(s) wait to deploy" in out and "docker restart cx-control" in out
+    assert "a@example.com: 3 to deploy, their RAM quota" in out
+
+
+# ---------- /admin prints the RUNBOOK's steps ----------
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+
+
+def test_admin_prints_the_runbooks_steps_in_its_order():
+    """An operator may follow /admin's printed steps instead of docs/RUNBOOK.md. Without
+    the second import after the DNS move, every sign-up, reset and project made online
+    between the two was lost; without --start, the restart deployed nothing."""
+    import re
+    page = open(os.path.join(REPO, "site", "admin.html"), encoding="utf-8").read()
+    term = re.search(r'<pre class="term">(.*?)</pre>', page, re.S).group(1)
+    lines = [ln.strip() for ln in re.sub(r"<[^>]+>", "", term).splitlines() if ln.strip()]
+    printed = [ln for ln in lines if not ln.startswith("#")]
+    imp = "docker exec cx-control python -m app.import_online"
+    assert printed == [f"{imp} --dry-run", imp, imp, "VERIFY_ALLOW_RESTART=1 ./verify-public.sh",
+                       f"{imp} --start", "docker restart cx-control", f"{imp} --notify"]
+    dns = next(i for i, ln in enumerate(lines) if "Cloudflare DNS" in ln)
+    imports = [i for i, ln in enumerate(lines) if ln == imp]
+    assert imports[0] < dns < imports[1]
+    # The same commands, in the same order, as the RUNBOOK's section.
+    runbook = open(os.path.join(REPO, "docs", "RUNBOOK.md"), encoding="utf-8").read()
+    section = runbook.split("## Leaving Vercel", 1)[1].split("\n## ", 1)[0]
+    commands = [re.sub(r" && docker logs -f cx-control$", "",
+                       ln.strip().removeprefix("cd /root/cicatrixa-platform && "))
+                for block in re.findall(r"```bash\n(.*?)```", section, re.S)
+                for ln in block.splitlines()]
+    at = -1
+    for c in printed:                       # each one after the one before (raises if not)
+        at = commands.index(c, at + 1)
